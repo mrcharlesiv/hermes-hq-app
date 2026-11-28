@@ -242,8 +242,19 @@ import UIKit
         let text: String, about: String
         switch kind {
         case .approval:
-            text = NotificationText.commandSummary(params["command"]?.string ?? "")
-            about = NotificationText.preview(params["description"]?.string ?? "")
+            switch params["kind"]?.string {
+            case "access":
+                let path = NotificationText.preview(params["path"]?.string ?? "")
+                text = path.isEmpty ? "Folder access needed" : "Folder access needed: \(path)"
+                about = NotificationText.preview(params["risk"]?.string ?? params["description"]?.string ?? "")
+            case "network":
+                let site = NotificationText.preview(params["label"]?.string ?? params["host"]?.string ?? "")
+                text = site.isEmpty ? "Website access needed" : "Website access needed: \(site)"
+                about = NotificationText.preview(params["risk"]?.string ?? params["description"]?.string ?? "")
+            default:
+                text = NotificationText.commandSummary(params["command"]?.string ?? "")
+                about = NotificationText.preview(params["description"]?.string ?? "")
+            }
         case .clarify:
             text = NotificationText.preview(params["questions"]?.array?.first?["question"]?.string ?? params["question"]?.string ?? "")
             about = ""

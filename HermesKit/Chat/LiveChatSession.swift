@@ -834,8 +834,8 @@ final class LiveChatSession: ChatSessionModel {
     private static let watchedEvents: Set<String> = [
         "gateway.ready", "sessions.changed", "session.reclaimed", "btw.complete", "background.complete",
         "message.start", "message.delta", "reasoning.delta", "thinking.delta", "reasoning.available",
-        "message.interim", "tool.generating", "tool.start", "tool.complete", "status.update",
-        "message.complete", "session.usage", "session.info", "error", "session.resume_progress", "session.title",
+        "message.interim", "tool.generating", "tool.start", "tool.complete", "tool.output_risk", "plugin.card",
+        "status.update", "message.complete", "session.usage", "session.info", "error", "session.resume_progress", "session.title",
     ]
 
     func subscribe() {

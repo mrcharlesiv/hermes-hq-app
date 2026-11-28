@@ -35,8 +35,9 @@ import Foundation
     /// Bots this device deleted, and when: a roster read sent before then may still list them, so they stay out until a
     /// read sent afterwards has answered.
     var deletedAt: [String: Date] = [:]
-    /// `profiles.create` copies the default profile on the gateway (a long handler): its own timeout. Tests shrink it.
-    var createTimeout: Duration = .seconds(90)
+    /// `profiles.create` seeds bundled skills (up to 60 s) and runs the bounded default-plugins preflight (120 s) on
+    /// Hermes 0.23.5+ (matches upstream `PROFILE_CREATE_TIMEOUT_MS` / `CREATE_RPC_TIMEOUT`: 300 s). Tests shrink it.
+    var createTimeout: Duration = .seconds(300)
     /// Default models this device set, kept over roster reads sent before they settled (BotStore+Model.swift).
     var modelWrites: [String: BotModelWrite] = [:]
 
@@ -758,7 +759,7 @@ extension BotStore {
         let soul = BotIdentity.composeSoul(slug: slug, title: identity.title, description: description,
                                            serverInjectsProtocol: editing.botModeProtocol ?? true, teammates: teammates)
         do {
-            // A long handler on the gateway (it copies the default profile): 90 s.
+            // A long handler on the gateway (bundled skills + default-plugins preflight on 0.23.5+): 300 s.
             _ = try await client.call("profiles.create", [
                 "name": .string(slug), "description": .string(descriptionText), "clone_from": "default",
                 "no_skills": false, "share_auth": true, "soul": .string(soul),

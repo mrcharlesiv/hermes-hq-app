@@ -51,6 +51,8 @@ actor GatewayConnection {
         case releaseHold(granted: Bool)
         case path(PathChange)
         case reconnectNow
+        case setVisibleActivitySession(token: UUID, sessionId: String?)
+        case noteActivityInput
         case shutdown
     }
 
@@ -117,7 +119,10 @@ actor GatewayConnection {
     // [questions] The current socket's `client.capabilities` call and its `declines_not_shown` (spec 1x §2.1): readable
     // from any thread, reset when the socket closes.
     private var capabilitiesCallId: Int?
+    private var identityCallId: Int?
     nonisolated let declinesNotShown = Locked(false)
+    nonisolated let supportsClientActivity = Locked(false)
+    private var activity = ClientActivityAggregator()
 
     // Requests
     private var nextId = 1
@@ -207,6 +212,12 @@ actor GatewayConnection {
         case .releaseHold(let granted): releaseHold(granted: granted)
         case .path(let change): pathChanged(change)
         case .reconnectNow: manualRetry()
+        case .setVisibleActivitySession(let token, let sessionId):
+            activity.setSession(sessionId, token: token)
+            sendAggregatedActivity()
+        case .noteActivityInput:
+            activity.noteInput()
+            if !activity.isAway, !activity.sessions.isEmpty { sendAggregatedActivity() }
         case .shutdown: shutdown()
         }
     }
@@ -717,9 +728,11 @@ actor GatewayConnection {
             deliverLive(event, size: size)
         case .result(let id, let value):
             if id == capabilitiesCallId { capabilitiesAnswered(value); return }   // [questions]
+            if id == identityCallId { identityAnswered(value); return }           // [v0.23.4 client-identity]
             settle(id, .success(value))
         case .failure(let id, let error):
             if id == capabilitiesCallId { capabilitiesCallId = nil; return }     // [questions] old backend: -32601
+            if id == identityCallId { identityCallId = nil; return }             // [v0.23.4] old backend rejects `client` param
             settle(id, .failure(error))
         case .stringAnswer(let id):
             heartbeatsOutstanding.remove(id)
@@ -810,7 +823,9 @@ actor GatewayConnection {
         verifyTimer?.cancel(); verifyTimer = nil
         streaming.removeAll()
         capabilitiesCallId = nil            // [questions]
+        identityCallId = nil                // [v0.23.4 client-identity]
         declinesNotShown.set(false)
+        supportsClientActivity.set(false)
         heartbeatsOutstanding.removeAll()
         lastHeartbeatSent = nil
         pingInFlight = nil
@@ -1091,6 +1106,7 @@ actor GatewayConnection {
     private func becameActive() {
         let wasBackgrounded = backgrounded
         backgrounded = false
+        activity.setAway(false)
         graceTimer?.cancel(); graceTimer = nil
         out.endBackgroundTask()
         // [connect-fast] The app tells us on coming forward and again once active: the second, within 2 s and with no
@@ -1116,7 +1132,10 @@ actor GatewayConnection {
             return
         }
         if socket != nil {
-            if wasBackgrounded { wakeProbe() }
+            if wasBackgrounded {
+                wakeProbe()
+                sendAggregatedActivity()
+            }
         } else {
             reconnectNow(forced: true)
         }
@@ -1147,6 +1166,8 @@ actor GatewayConnection {
     private func enteredBackground(granted: Bool) async {
         guard !backgrounded else { return }
         backgrounded = true
+        activity.setAway(true)
+        sendAggregatedActivity()
         backgroundClosed = false
         leftAt = .now                                     // [perf-returns]
         returned = nil
@@ -1316,11 +1337,41 @@ actor GatewayConnection {
         nextId += 1
         capabilitiesCallId = id
         socket.send(.string(RPCFrame.request(id: id, method: "client.capabilities", params: ["server_requests": true]))) { _ in }
+        // [v0.23.4] Announce client identity as its own call right after `server_requests` so older gateways that reject
+        // the `client` parameter keep `server_requests` enabled (upstream commit dcc20cede9f).
+        let helloId = nextId
+        nextId += 1
+        identityCallId = helloId
+        socket.send(.string(RPCFrame.request(id: helloId, method: "client.capabilities",
+                                             params: ["client": ClientIdentity.current().json]))) { _ in }
     }
 
     private func capabilitiesAnswered(_ value: JSONValue) {
         capabilitiesCallId = nil
         declinesNotShown.set(value["declines_not_shown"]?.bool == true)
+        if value["client_activity"]?.bool == true {
+            let wasSupported = supportsClientActivity.value
+            supportsClientActivity.set(true)
+            if !wasSupported { sendAggregatedActivity() }
+        }
+    }
+
+    private func identityAnswered(_ value: JSONValue) {
+        identityCallId = nil
+        if value["client_activity"]?.bool == true {
+            let wasSupported = supportsClientActivity.value
+            supportsClientActivity.set(true)
+            if !wasSupported { sendAggregatedActivity() }
+        }
+    }
+
+    /// Writes the connection's aggregated `client.activity` frame synchronously on this actor so updates are strictly ordered.
+    private func sendAggregatedActivity() {
+        guard !shutDown, supportsClientActivity.value, let socket, socketReady else { return }
+        let report = activity.report()
+        let id = nextId
+        nextId += 1
+        socket.send(.string(RPCFrame.request(id: id, method: "client.activity", params: report.json))) { _ in }
     }
 
     /// Writes one answer frame on the current socket and returns once it went out, with that socket's epoch. Throws

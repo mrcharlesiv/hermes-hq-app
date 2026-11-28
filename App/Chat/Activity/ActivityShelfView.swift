@@ -189,7 +189,7 @@ final class ActivityShelfView: UIView {
 
     private func cardWidth(_ width: CGFloat) -> CGFloat {
         if traitCollection.preferredContentSizeCategory.isAccessibilityCategory { return width }
-        if detail?.kind == .subagents || detail?.kind == .background { return width }
+        if detail?.kind == .subagents || detail?.kind == .background || detail?.kind == .teammates { return width }
         return min(width, 300)
     }
 

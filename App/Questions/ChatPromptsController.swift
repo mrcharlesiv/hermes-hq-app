@@ -112,7 +112,8 @@ import UIKit
                 command: first.command, description: first.description, showsDescription: first.showsDescription,
                 position: max(1, total - prompts.approvals.count + 1), total: total, allowSession: first.allowSession,
                 allowAlways: first.allowAlways, expired: expired.contains(first.id), answering: first.answering,
-                leaving: first.leaving, clockKey: first.clockKey, firstSeen: first.firstSeen, asker: asker, botName: chat?.botName)
+                leaving: first.leaving, clockKey: first.clockKey, firstSeen: first.firstSeen, asker: asker, botName: chat?.botName,
+                kind: first.kind, path: first.path, access: first.access, host: first.host, label: first.label, risk: first.risk)
         }
         if let clarify = prompts.clarify {
             out.clarifyNote = .asked(count: clarify.questions.count,
@@ -136,6 +137,14 @@ import UIKit
         expired = expired.filter { id in prompts.approvals.contains { $0.id == id } }
         updateTicker()
         if !prompts.approvals.isEmpty && timeout == nil { readTimeout(fresh: false) }
+        if let first = prompts.approvals.first, !first.leaving {
+            if lastDisplayedApprovalId != first.id {
+                lastDisplayedApprovalId = first.id
+                prompting.approvalDisplayed(first.id)
+            }
+        } else {
+            lastDisplayedApprovalId = nil
+        }
         updateDock(animated: previous.clarify?.id != prompts.clarify?.id)
         updateSheets()
         dropStaleConfirm()
@@ -196,7 +205,12 @@ import UIKit
     func cardTapped(_ id: String, _ button: ApprovalButton) {
         switch button {
         case .run: answer(id, .once)
-        case .reject: answer(id, .deny)
+        case .reject:
+            if let approval = prompts.approvals.first(where: { $0.id == id }), approval.isSandbox {
+                confirmSandboxDeny(approval)
+            } else {
+                answer(id, .deny)
+            }
         case .session: answer(id, .session)
         case .always: confirmAlways(id)
         case .dismiss: prompting.dismissExpiredApproval(id)
@@ -204,12 +218,52 @@ import UIKit
         }
     }
 
+    /// [v0.23.4] Sandbox folder/website denials accept an optional reason string sent back to the sandbox.
+    private func confirmSandboxDeny(_ approval: ApprovalPrompt) {
+        guard let chat else { answer(approval.id, .deny); return }
+        let target = approval.kind == .access ? (approval.path ?? "this folder") : (approval.label ?? approval.host ?? "this website")
+        let title = approval.kind == .access ? "Deny Folder Access?" : "Deny Website Access?"
+        let alert = UIAlertController(title: title, message: "You can optionally tell \(chat.botName) why \(target) was denied.", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "Reason (optional)"
+            field.autocapitalizationType = .sentences
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Deny", style: .destructive) { [weak self, weak alert] _ in
+            let raw = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let reason = raw.map { String($0.prefix(500)) }
+            self?.answer(approval.id, .deny, reason: reason)
+        })
+        alwaysConfirm = (approval.id, alert)
+        chat.present(alert, animated: true)
+    }
+
     private func confirmAlways(_ id: String) {
         guard let chat, let approval = prompts.approvals.first(where: { $0.id == id }) else { return }
-        let command = approval.command.trimmingCharacters(in: .whitespacesAndNewlines)
-        var message = "\(chat.botName) won’t ask again before running commands that match “\(approval.description)” — in this chat or any other, from now on."
-        if !command.isEmpty { message += "\n\n\(command)" }
-        let alert = UIAlertController(title: "Always Allow This Command?", message: message, preferredStyle: .alert)
+        let title: String
+        var message: String
+        switch approval.kind {
+        case .access:
+            title = "Always Allow Folder Access?"
+            let accessPhrase: String = switch approval.access {
+            case .readWrite: "read and write access"
+            case .read: "read-only access"
+            case nil: "access"
+            }
+            message = "\(chat.botName) will always have \(accessPhrase) to this folder in its sandbox."
+            if let path = approval.path, !path.isEmpty { message += "\n\n\(path)" }
+        case .network:
+            title = "Always Allow Website Access?"
+            let site = approval.label ?? approval.host ?? "this website"
+            message = "\(chat.botName) will always be allowed to reach \(site) from its sandbox."
+            if let host = approval.host, !host.isEmpty, host != site { message += "\n\n\(host)" }
+        case .command:
+            title = "Always Allow This Command?"
+            let command = approval.command.trimmingCharacters(in: .whitespacesAndNewlines)
+            message = "\(chat.botName) won’t ask again before running commands that match “\(approval.description)” — in this chat or any other, from now on."
+            if !command.isEmpty { message += "\n\n\(command)" }
+        }
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Always Allow", style: .destructive) { [weak self] _ in self?.answer(id, .always) })
         alwaysConfirm = (id, alert)
@@ -219,6 +273,7 @@ import UIKit
     /// Verify round 3: the Always allow confirm, while it is up. It goes as soon as its approval is answered elsewhere
     /// (or expires): a tap on it then would allow nothing while feeling like a permanent rule was written.
     private var alwaysConfirm: (id: String, alert: UIAlertController)?
+    private var lastDisplayedApprovalId: String?
 
     /// The "Skip All Questions?" confirm, while it is up: it goes as soon as its questions are answered or withdrawn
     /// elsewhere (its buttons would do nothing, and a password sheet for this chat waits behind it).
@@ -247,13 +302,13 @@ import UIKit
         prompts.approvals.contains { $0.id == id && $0.answering == nil && !$0.leaving }
     }
 
-    private func answer(_ id: String, _ choice: ApprovalChoice) {
+    private func answer(_ id: String, _ choice: ApprovalChoice, reason: String? = nil) {
         // Answered elsewhere meanwhile: nothing is sent, so nothing confirms it (no success tap, no allowlist rule).
         guard isOpen(id) else { return }
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.prompting.answerApproval(id, choice)
+                try await self.prompting.answerApproval(id, choice, reason: reason)
                 // Allowing plays success; Reject is silent (MEM:taptic-feedback-gaps).
                 if choice != .deny { Haptics.play(.success) }
             } catch {

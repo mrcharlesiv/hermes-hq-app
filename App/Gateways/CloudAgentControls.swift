@@ -63,6 +63,7 @@ extension CloudGatewayModel {
             if sizeChoices.isEmpty { sizeChoices = await client.sizeChoices() }
             if let found = await client.teamGateway(agent.id) { teamGateways[agent.id] = found }
             if busy[agent.id] == nil, let fresh = try? await client.agent(agent.id, live: true) { update(fresh) }
+            if let status = await readWebappStatus(self.agent(agent.id) ?? agent) { webappStatus[agent.id] = status }
         }
     }
 
@@ -94,7 +95,10 @@ extension CloudGatewayModel {
             AppLog.trace("cloud", "refresh \(agent.id) failed: \(Self.words(error))")
         }
         if let found = await client.teamGateway(agent.id) { teamGateways[agent.id] = found }
-        if let now = self.agent(agent.id) { loadSpend([now]) }
+        if let now = self.agent(agent.id) {
+            loadSpend([now])
+            if let status = await readWebappStatus(now) { webappStatus[agent.id] = status }
+        }
     }
 
     // MARK: Asking first
@@ -133,6 +137,17 @@ extension CloudGatewayModel {
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200, let json = try? JSONValue.parse(data) else { return nil }
         return json["version"]?.pgString.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// [v0.23.5] Reads `webapp_state` and `webapp_url` from a Cloud agent's `/api/status` (authenticated via its saved
+    /// gateway when present, since upstream only populates the fields for signed-in callers).
+    func readWebappStatus(_ agent: CloudAgent) async -> CloudWebappStatus? {
+        guard let base = agent.dashboardURL,
+              let saved = savedGateway(agent),
+              let endpoint = HermesUpdateCenter.endpoint(for: saved.account) else { return nil }
+        defer { endpoint.finish() }
+        guard let json = try? await endpoint.json("GET", "/api/status", query: [], body: nil, timeout: 8) else { return nil }
+        return CloudWebappStatus(status: json, agentHost: base.host)
     }
 
     func askRename(_ agent: CloudAgent) {

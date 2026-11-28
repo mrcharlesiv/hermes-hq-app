@@ -5,7 +5,7 @@ import Foundation
 import Network
 import UIKit
 
-nonisolated final class LiveGatewayClient: GatewayClient, GatewayTransfers, GatewayPluginSockets, GatewayDisplaySockets, GatewayTerminalSockets, Sendable {   // VOICE: GatewayTransfers; [browser] GatewayPluginSockets; [screen] GatewayDisplaySockets; [terminal] GatewayTerminalSockets
+nonisolated final class LiveGatewayClient: GatewayClient, GatewayTransfers, GatewayPluginSockets, GatewayDisplaySockets, GatewayTerminalSockets, ClientActivityReporting, Sendable {   // VOICE: GatewayTransfers; [browser] GatewayPluginSockets; [screen] GatewayDisplaySockets; [terminal] GatewayTerminalSockets
     let account: GatewayAccount
 
     private let auth: GatewayAuth
@@ -351,6 +351,25 @@ nonisolated final class LiveGatewayClient: GatewayClient, GatewayTransfers, Gate
     }
 
     var declinesNotShown: Bool { connection.declinesNotShown.value }
+
+    // MARK: Client activity [v0.23.4]
+
+    var supportsClientActivity: Bool { connection.supportsClientActivity.value }
+
+    func setVisibleActivitySession(_ sessionId: String?, token: UUID) {
+        guard !closed.value else { return }
+        commands.yield(.setVisibleActivitySession(token: token, sessionId: sessionId))
+    }
+
+    func noteActivityInput() {
+        guard !closed.value else { return }
+        commands.yield(.noteActivityInput)
+    }
+
+    func reportClientActivity(_ report: ClientActivityReport) async {
+        guard !closed.value, supportsClientActivity else { return }
+        _ = try? await call("client.activity", report.json, timeout: .seconds(5))
+    }
 
     #if DEBUG
     var debugConnection: GatewayConnection { connection }

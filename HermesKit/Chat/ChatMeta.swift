@@ -85,6 +85,7 @@ nonisolated extension ChatMessage {
             && isStreaming == other.isStreaming && isPending == other.isPending && interrupted == other.interrupted
             && error == other.error && reactions == other.reactions && reactionRow == other.reactionRow
             && helperReport == other.helperReport && job == other.job && fallbackText == other.fallbackText
+            && pluginCard == other.pluginCard && contentRefusedNotice == other.contentRefusedNotice
     }
 
     /// All prose text joined (no reasoning).

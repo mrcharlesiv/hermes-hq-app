@@ -79,6 +79,21 @@ import UIKit
     }()
     /// [background] How often the list is read while a command runs or the bot works (the desktop's own 5 s).
     static let backgroundPollSeconds: Double = 5
+    /// [v0.23.3] Unsettled `message_agent` deliveries from this bot (`bot_delivery.list`, Bot Chat only).
+    private(set) var teammateWaits: [BotDeliveryRow] = []
+    private var teammatesUnsupported = false
+    private var teammatesPoll: Task<Void, Never>?
+    private lazy var teammatesBody: TeammateWaitsBody = {
+        let body = TeammateWaitsBody()
+        body.onOpen = { target in
+            if let root = MainTabController.current { KeyCommands.openBotChat(target, root: root) }
+        }
+        body.onDismiss = { [weak self] id in
+            TeammateWaitsStore.shared.dismiss(id)
+            self?.updateShelf(animated: true)
+        }
+        return body
+    }()
 
     // Steps (Hide fold, Show Steps)
     private var revealedFallback: Set<String> = []
@@ -142,6 +157,7 @@ import UIKit
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
         ActivityClock.shared.unsubscribe(self)
         backgroundPoll?.cancel()        // [background]
+        teammatesPoll?.cancel()
     }
 
     var provider: ChatActivityProviding? { chat.session as? ChatActivityProviding }
@@ -240,6 +256,7 @@ import UIKit
         reportVisibility(force: true)
         if on { updateShelf(animated: false) }
         if on { pollBackground() } else { backgroundPoll?.cancel(); backgroundPoll = nil }   // [background]
+        if on { pollTeammates() } else { teammatesPollToken = nil; teammatesPoll?.cancel(); teammatesPoll = nil }
         #if DEBUG
         if on { motionProbe?.start() } else { motionProbe?.stop() }
         #endif
@@ -273,6 +290,56 @@ import UIKit
         updateShelf(animated: true)
         refreshStepsSheet()
         pollBackground()            // [background] a turn that starts may start a command; one that ends may leave one
+        pollTeammates()
+    }
+
+    // MARK: Waiting on teammates [v0.23.3]
+
+    private var teammatesPollToken: UUID?
+
+    /// Polls `bot_delivery.list` every 5 s while a Bot Chat is visible; stops permanently for this screen if the gateway
+    /// responds `-32601` (older Hermes).
+    private func pollTeammates() {
+        guard attached, !teammatesUnsupported, teammatesPoll == nil,
+              let live = chat.session as? LiveChatSession, live.menus.isBotChat else { return }
+        let profile = live.profile.isEmpty ? "default" : live.profile
+        let token = UUID()
+        teammatesPollToken = token
+        teammatesPoll = Task { [weak self, weak live] in
+            var first = true
+            while !Task.isCancelled {
+                if !first { try? await Task.sleep(for: .seconds(Self.backgroundPollSeconds)) }
+                first = false
+                guard !Task.isCancelled, let live, let self, self.attached, self.teammatesPollToken == token else { break }
+                guard live.connection == .ready else { continue }
+                do {
+                    switch try await TeammateWaitsAPI.list(client: live.client, profile: profile) {
+                    case .unsupported:
+                        guard self.teammatesPollToken == token else { return }
+                        self.teammatesUnsupported = true
+                        if !self.teammateWaits.isEmpty {
+                            self.teammateWaits = []
+                            self.updateShelf(animated: true)
+                        }
+                        self.teammatesPoll = nil
+                        self.teammatesPollToken = nil
+                        return
+                    case .rows(let rows):
+                        guard !Task.isCancelled, self.teammatesPollToken == token else { break }
+                        if rows != self.teammateWaits {
+                            self.teammateWaits = rows
+                            self.updateShelf(animated: true)
+                        }
+                    }
+                } catch {
+                    // Keep last known deliveries on transient read failure (teammate-waits.tsx).
+                }
+            }
+            if self?.teammatesPollToken == token {
+                self?.teammatesPoll = nil
+                self?.teammatesPollToken = nil
+            }
+        }
     }
 
     // MARK: Background tasks [background]
@@ -804,6 +871,7 @@ import UIKit
             case .subagents: body = subagentsBody
             case .previousTasks: body = previousBody
             case .background: body = backgroundBody     // [background]
+            case .teammates: body = teammatesBody       // [v0.23.3]
             case .browser: body = UIView()          // [browser] a chip only: it opens the viewer
             case .phone: body = UIView()            // [phone-calls] a chip only: it opens the call sheet
             }
@@ -915,12 +983,14 @@ import UIKit
         }
         let previousShown = idle && a.liveTodos == nil && !a.retainedTodos.isEmpty
             && !Self.hiddenPieces.contains(hideKey(a.retainedTodos))
+        let visibleTeammates = TeammateWaitsStore.shared.visible(teammateWaits)
         var present: Set<ShelfPieceKind> = []
         if goal != nil { present.insert(.goal) }
         if a.liveTodos != nil { present.insert(.tasks) }
         if !shown.isEmpty { present.insert(.subagents) }
         if previousShown { present.insert(.previousTasks) }
         if !backgroundTasks.isEmpty { present.insert(.background) }   // [background]
+        if !visibleTeammates.isEmpty { present.insert(.teammates) }   // [v0.23.3]
         if browserChip != nil { present.insert(.browser) }      // [browser]
         if phoneChip != nil { present.insert(.phone) }          // [phone-calls]
         // New categories never open the overview or a detail. Their independent lifetimes are unchanged.
@@ -996,6 +1066,19 @@ import UIKit
         } else {
             selectedBackground = nil
         }
+        if !visibleTeammates.isEmpty {                          // [v0.23.3]
+            let piece = pieceView(.teammates)
+            let attention = visibleTeammates.filter(\.needsAttention).count
+            let active = visibleTeammates.contains(where: \.isActive)
+            let value = attention > 0 ? "\(attention) need you" : "\(visibleTeammates.count) waiting"
+            piece.header.set(words: "Waiting on teammates", value: value,
+                             spoken: "Waiting on \(visibleTeammates.count) \(visibleTeammates.count == 1 ? "teammate" : "teammates")",
+                             spinner: active ? ChatPalette.label2 : nil)
+            let bots = M2Wiring.model?.bots ?? []
+            teammatesBody.update(visibleTeammates, displayName: { target in
+                bots.first(where: { $0.id == target })?.name ?? RosterRules.titleCase(target)
+            }, now: now)
+        }
         if present.contains(.previousTasks) {
             let piece = pieceView(.previousTasks)
             let done = a.retainedTodos.filter { $0.status == .completed }.count
@@ -1040,6 +1123,14 @@ import UIKit
             case .background:
                 words = "\(backgroundTasks.count) background"
                 accessibilityWords = words
+            case .teammates:
+                let attentionCount = visibleTeammates.filter(\.needsAttention).count
+                attention = attentionCount > 0
+                running = visibleTeammates.contains(where: \.isActive)
+                words = attentionCount > 0
+                    ? (attentionCount == 1 ? "Teammate needs you" : "\(attentionCount) teammates need you")
+                    : "\(visibleTeammates.count) \(visibleTeammates.count == 1 ? "teammate" : "teammates")"
+                accessibilityWords = "Waiting on \(visibleTeammates.count) \(visibleTeammates.count == 1 ? "teammate" : "teammates")"
             case .subagents:
                 words = live.isEmpty ? "Helpers finished" : "\(live.count) \(live.count == 1 ? "helper" : "helpers")"
                 historical = live.isEmpty
@@ -1089,15 +1180,17 @@ import UIKit
             shelf.summary.entries.removeAll()
             shelf.expanded = false
         }
-        // Timers tick while the subagents or background card is open.
+        // Timers tick while the subagents, background, or teammates card is open.
         let subagentsOpen = openPieces.contains(.subagents) && present.contains(.subagents)
         let backgroundOpen = openPieces.contains(.background) && present.contains(.background)
-        if subagentsOpen || backgroundOpen {
+        let teammatesOpen = openPieces.contains(.teammates) && present.contains(.teammates)
+        if subagentsOpen || backgroundOpen || teammatesOpen {
             ActivityClock.shared.subscribe(self) { [weak self] in
                 guard let self else { return }
                 let now = Date().timeIntervalSince1970
                 if self.openPieces.contains(.subagents) { self.subagentsBody.tick(now: now) }
                 if self.openPieces.contains(.background) { self.backgroundBody.tick(now: now) }
+                if self.openPieces.contains(.teammates) { self.teammatesBody.tick(now: now) }
             }
         } else {
             ActivityClock.shared.unsubscribe(self)

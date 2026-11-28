@@ -48,21 +48,33 @@ public sealed class Transcript
         // to send (its text is the user's, and the gateway never stored it).
         // A lost send's restored bubble is not kept here: the chat puts it back where it was said after the page
         // (ChatSession.RestoreLostSends), not at the end.
-        var tail = _messages.Where(m => m.Id.StartsWith("local-") && (Busy || m.Error != null
-                || m.Id.StartsWith(LocalRowPrefix, StringComparison.Ordinal)
-                || m.Id.StartsWith(ProviderWait.NoticeIdPrefix, StringComparison.Ordinal))
-            && !m.Id.StartsWith(LostPrefix, StringComparison.Ordinal)
-            && !_endedAway.Contains(m.Id)   // [WIN-INFLIGHT-GRAFT] a turn of ours that ended while away: its stored rows
-            && !_interruptedTurns.Any(t => t.Anchor.Id == m.Id || t.Replies.Any(r => r.Id == m.Id))).ToList();
+        var tail = _messages.Where(m =>
+            (m.Id.StartsWith("local-") && (Busy || m.Error != null
+                    || m.Id.StartsWith(LocalRowPrefix, StringComparison.Ordinal)
+                    || m.Id.StartsWith(ProviderWait.NoticeIdPrefix, StringComparison.Ordinal))
+                && !m.Id.StartsWith(LostPrefix, StringComparison.Ordinal)
+                && !_endedAway.Contains(m.Id)   // [WIN-INFLIGHT-GRAFT] a turn of ours that ended while away: its stored rows
+                && !_interruptedTurns.Any(t => t.Anchor.Id == m.Id || t.Replies.Any(r => r.Id == m.Id)))
+            || m.Id.StartsWith(PluginCardPrefix, StringComparison.Ordinal)).ToList();
+        // Drop live `plugin-card-*` rows once the fetched stored page contains their persisted `(plugin_id, card_id)` twin.
+        var storedCardKeys = page.Where(m => m.PluginCard != null)
+            .Select(m => PluginCardKey(m.PluginCard!))
+            .Where(k => k.Length > 0)
+            .ToHashSet();
+        tail.RemoveAll(m => m.Id.StartsWith(PluginCardPrefix, StringComparison.Ordinal)
+            && m.PluginCard is { } card
+            && PluginCardKey(card) is { Length: > 0 } k && storedCardKeys.Contains(k));
+        static bool IsStoredUserOrRefused(ChatMessage m) =>
+            m.Role == Role.User || (m.Role == Role.System && m.ContentRefusedNotice != null);
         if (Busy && tail.FirstOrDefault(m => m.Role == Role.User) is { } localUser
-            && page.LastOrDefault(m => m.Role == Role.User) is { } storedUser
+            && page.LastOrDefault(IsStoredUserOrRefused) is { } storedUser
             && (localUser.RowId is { } userRow ? storedUser.RowId == userRow
                 : storedUser.Text == localUser.Text && !_interruptedTurns.Any(t => t.Anchor.Id == storedUser.Id
                     || (t.Anchor.RowId != null && t.Anchor.RowId == storedUser.RowId))))
             tail.Remove(localUser); // the prompt is persisted now
         // [WIN-INFLIGHT-GRAFT] The gateway's running or queued prompt, grafted in before it was stored: the page's own
         // row takes its place once the page holds it (the Mac's TranscriptMerge graft by words, 03 §4.5).
-        var recentUsers = page.TakeLast(8).Where(m => m.Role == Role.User).Select(m => SentTitles.Flat(m.Text)).ToHashSet();
+        var recentUsers = page.TakeLast(8).Where(IsStoredUserOrRefused).Select(m => SentTitles.Flat(m.Text)).ToHashSet();
         tail.RemoveAll(m => (m.Id.StartsWith(InflightPrefix, StringComparison.Ordinal) || m.Id.StartsWith(QueuedPrefix, StringComparison.Ordinal))
             && recentUsers.Contains(SentTitles.Flat(m.Text)));
         _endedAway.Clear();
@@ -429,9 +441,66 @@ public sealed class Transcript
                 }
                 Status = kind is "compacting" or "compressing" ? "Summarizing the chat…" : kind is "compacted" or "ready" ? null : Status;
                 return Outcome.Changed;
+            case "plugin.card":
+                return ApplyPluginCard(p);
+            case "tool.output_risk":
+                return ApplyToolOutputRisk(p);
             default:
                 return Outcome.None;
         }
+    }
+
+    public const string PluginCardPrefix = "plugin-card-";
+
+    private static string PluginCardKey(PluginCard card) =>
+        string.IsNullOrEmpty(card.PluginId) && string.IsNullOrEmpty(card.CardId) ? "" : $"{card.PluginId}\u0001{card.CardId}";
+
+    private Outcome ApplyPluginCard(JsonNode? p)
+    {
+        var pluginId = p.Str("plugin_id")?.Trim() ?? "";
+        var cardId = p.Str("card_id")?.Trim() ?? "";
+        if (pluginId.Length == 0 || cardId.Length == 0) return Outcome.None;
+        var displayText = p.Str("display_text")?.Trim() ?? p.Str("text")?.Trim() ?? "";
+        var card = new PluginCard(pluginId, cardId,
+            displayText.Length > 0 ? displayText : null,
+            p?.Get("payload")?.DeepClone());
+        var rowId = $"{PluginCardPrefix}{pluginId}-{cardId}";
+        var key = PluginCardKey(card);
+        if (_messages.Any(m => m.Id == rowId || (key.Length > 0 && m.PluginCard is { } c && PluginCardKey(c) == key)))
+            return Outcome.None;
+        var text = displayText.Length > 0 ? displayText : $"Card from {pluginId}";
+        _messages.Add(new ChatMessage(rowId, Role.System, [new TextPart(text)], DateTimeOffset.Now) { PluginCard = card });
+        return Outcome.Changed;
+    }
+
+    private Outcome ApplyToolOutputRisk(JsonNode? p)
+    {
+        var toolId = p.Text("tool_id") ?? p.Text("tool_call_id");
+        var riskLevel = p.Str("risk")?.Trim() ?? "";
+        if (riskLevel.Length == 0) return Outcome.None;
+        var findings = (p.Arr("findings")?.Select(J.AsString).Where(s => !string.IsNullOrEmpty(s)).OfType<string>().ToList())
+            ?? [];
+        var redacted = p.Bool("redacted") == true;
+        var risk = new ToolOutputRisk(riskLevel, findings, redacted);
+        for (var i = _messages.Count - 1; i >= 0; i--)
+        {
+            var msg = _messages[i];
+            if (msg.Role != Role.Assistant) continue;
+            var parts = msg.Parts.ToList();
+            var idx = toolId != null
+                ? parts.FindLastIndex(x => x is ToolPart tp && tp.Call.Id == toolId)
+                : parts.FindLastIndex(x => x is ToolPart);
+            if (idx < 0) continue;
+            var tp = (ToolPart)parts[idx];
+            var note = redacted ? $"Output redacted ({riskLevel})" : $"Output risk: {riskLevel}";
+            var mergedSummary = string.IsNullOrEmpty(tp.Call.Summary)
+                ? note
+                : (tp.Call.Summary.Contains(note, StringComparison.Ordinal) ? tp.Call.Summary : $"{tp.Call.Summary} · {note}");
+            parts[idx] = new ToolPart(tp.Call with { OutputRisk = risk, Summary = mergedSummary });
+            _messages[i] = msg with { Parts = parts, Revision = msg.Revision + 1 };
+            return Outcome.Changed;
+        }
+        return Outcome.None;
     }
 
     private Outcome Complete(JsonNode? p)

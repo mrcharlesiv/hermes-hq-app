@@ -93,6 +93,17 @@ struct SkillPageView: View {
                 Section {
                     Toggle("Turned On", isOn: Binding(get: { skill.enabled }, set: { page.model.setSkill(skill, enabled: $0) }))
                         .disabled(page.model.toggling.contains(skill.name))
+                    if !page.model.readOnly, skill.supportsLock {
+                        Toggle("Lock Against Agent Edits", isOn: Binding(get: { skill.locked }, set: { page.model.setSkillLocked(skill, locked: $0) }))
+                            .disabled(page.model.locking.contains(skill.name))
+                            .accessibilityIdentifier("skill.lock")
+                    }
+                } footer: {
+                    if !page.model.readOnly, skill.supportsLock {
+                        HQSectionFooter {
+                            Text("Locking prevents the agent from editing this skill. You can still edit it yourself.")
+                        }
+                    }
                 }
             }
             Section {

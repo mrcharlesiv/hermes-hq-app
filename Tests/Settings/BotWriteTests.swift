@@ -384,12 +384,12 @@ private func makeStore(_ gateway: MetaGateway) async -> BotStore {
     }
 
     /// `profiles.create` timed out after the gateway made the profile: New Bot carries on (meta, Bot Chat) instead of
-    /// failing, and asked with a 90 s timeout.
+    /// failing, and asked with a 300 s timeout (Hermes 0.23.5 `PROFILE_CREATE_TIMEOUT_MS`).
     @Test func aCreateWhoseAnswerWasLostCarriesOn() async throws {
         let gateway = MetaGateway(["ivy": [:]])
         gateway.client.on("profiles.create") { [unowned gateway] params in
             gateway.withLock { gateway.meta[params["name"]?.string ?? ""] = [:] }
-            throw RPCError(code: RPCError.timeoutCode, message: "request timed out after 90s: profiles.create", data: nil)
+            throw RPCError(code: RPCError.timeoutCode, message: "request timed out after 300s: profiles.create", data: nil)
         }
         gateway.client.on("setup.runtime_check") { _ in ["ok": true] }
         gateway.client.on("session.list") { _ in ["sessions": []] }
@@ -398,7 +398,7 @@ private func makeStore(_ gateway: MetaGateway) async -> BotStore {
         let store = await makeStore(gateway)
         let result = try await store.createBot(name: "Inbox Triage", title: "", description: "Sorts my email")
         #expect(result.bot.id == "inbox-triage")
-        #expect(gateway.client.calls("profiles.create").last?.timeout == .seconds(90))
+        #expect(gateway.client.calls("profiles.create").last?.timeout == .seconds(300))
         #expect(gateway.client.calls("profiles.configure").contains { $0.params["name"] == "inbox-triage" })
         #expect(gateway.client.calls("session.create").count == 1)
         // Not made at all: the failure stands.

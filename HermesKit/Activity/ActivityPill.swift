@@ -1,6 +1,6 @@
 // Presentation only: a plan is not evidence of live work. All categories stay available in the overview.
 nonisolated enum ShelfPieceKind: Int, CaseIterable, Hashable, Sendable {
-    case goal, tasks, subagents, background, previousTasks, browser, phone
+    case goal, tasks, subagents, background, teammates, previousTasks, browser, phone
 }
 
 nonisolated struct ActivityPill: Equatable, Sendable {
@@ -24,7 +24,7 @@ nonisolated struct ActivityPill: Equatable, Sendable {
             func rank(_ entry: Entry) -> Int {
                 if entry.needsAttention { return 0 }
                 if entry.kind == .tasks || (entry.kind == .previousTasks && !entry.isHistorical) { return 1 }
-                if entry.isRunning, entry.kind == .subagents || entry.kind == .background { return 2 }
+                if entry.isRunning, entry.kind == .subagents || entry.kind == .background || entry.kind == .teammates { return 2 }
                 if entry.isRunning { return 3 }
                 return 4
             }

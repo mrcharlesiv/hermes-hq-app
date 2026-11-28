@@ -37,6 +37,10 @@ final class GroupInfoModel {
     /// Bumped on every change of the store or the mutes (neither is observable by itself).
     var version = 0
     var online = true
+    /// Per-member `approvals.mode` (`"manual"`, `"smart"`, `"off"`), scoped per profile (Hermes 0.23.5 #125969).
+    var memberApprovalModes: [String: String] = [:]
+    var approvalModeLoadFailed: Set<String> = []
+    var savingApprovalProfile: Set<String> = []
     @ObservationIgnored let services: any GroupServices
     @ObservationIgnored weak var host: UIViewController?
 
@@ -100,6 +104,85 @@ final class GroupInfoModel {
     func nameAndPhoto() {
         guard online, let navigation = host?.navigationController else { return }
         navigation.pushViewController(GroupNamePhotoController(uid: uid, services: services), animated: true)
+    }
+
+    func roomContext() {
+        guard online, room?.isHosted == true, let navigation = host?.navigationController else { return }
+        navigation.pushViewController(GroupContextController(uid: uid, services: services), animated: true)
+    }
+
+    static func showsApprovalModes(for room: GroupRoom?, hasHostedRooms: Bool) -> Bool {
+        guard hasHostedRooms, let room, room.isHosted else { return false }
+        return !room.members.isEmpty
+    }
+
+    /// Reads each local member's `approvals.mode` via profile-scoped `config.get` (hosted rooms only).
+    func loadMemberApprovalModes() {
+        guard online, room?.isHosted == true, let hosted = store?.hostedRooms else { return }
+        let profiles = seats.filter { $0.canDrive }.map(\.name)
+        guard !profiles.isEmpty else { return }
+        Task { [weak self] in
+            for profile in profiles {
+                guard let self else { return }
+                do {
+                    let mode = try await hosted.approvalMode(forProfile: profile)
+                    self.approvalModeLoadFailed.remove(profile)
+                    self.memberApprovalModes[profile] = mode
+                } catch {
+                    self.approvalModeLoadFailed.insert(profile)
+                }
+            }
+        }
+    }
+
+    func pickMemberApprovalMode(_ mode: String, for seat: GroupSeat) {
+        guard online, room?.isHosted == true, seat.canDrive, !savingApprovalProfile.contains(seat.name) else { return }
+        if mode == "off", memberApprovalModes[seat.name] != "off" {
+            guard let host else { return }
+            let alert = UIAlertController(
+                title: "Turn Off Approvals for \(seat.display)?",
+                message: "This turns off command approvals for \(seat.display) across all of \(seat.display)’s chats, not just this group.",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            alert.addAction(UIAlertAction(title: "Turn Off", style: .destructive) { [weak self] _ in
+                self?.setMemberApprovalMode("off", for: seat)
+            })
+            host.present(alert, animated: true)
+            return
+        }
+        setMemberApprovalMode(mode, for: seat)
+    }
+
+    func setMemberApprovalMode(_ mode: String, for seat: GroupSeat) {
+        guard online, room?.isHosted == true, seat.canDrive, let hosted = store?.hostedRooms, !savingApprovalProfile.contains(seat.name) else { return }
+        let previous = memberApprovalModes[seat.name]
+        memberApprovalModes[seat.name] = mode
+        savingApprovalProfile.insert(seat.name)
+        Haptics.play(.selection)
+        Task { [weak self] in
+            defer { self?.savingApprovalProfile.remove(seat.name) }
+            do {
+                let kept = try await hosted.setApprovalMode(mode, forProfile: seat.name)
+                self?.approvalModeLoadFailed.remove(seat.name)
+                self?.memberApprovalModes[seat.name] = kept
+            } catch {
+                if let previous { self?.memberApprovalModes[seat.name] = previous }
+                if let host = self?.host {
+                    FailureAlert.present(error, fallbackTitle: "Couldn’t Change \(seat.display)’s Approval Mode", from: host)
+                }
+            }
+        }
+    }
+
+    static func approvalModeTitle(_ raw: String?, unavailable: Bool = false) -> String {
+        if unavailable { return "Unavailable" }
+        switch raw?.lowercased() {
+        case "manual": return "Manual"
+        case "smart": return "Smart"
+        case "off": return "Off"
+        default: return "…"
+        }
     }
 
     func activity() {
@@ -208,6 +291,7 @@ final class GroupInfoController: UIHostingController<HQScaledRoot<GroupInfoView>
         }
         model.version += 1
         refreshOnline()
+        model.loadMemberApprovalModes()
         timer?.invalidate()
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.refreshOnline() } }
         RunLoop.main.add(timer, forMode: .common)
@@ -285,9 +369,90 @@ struct GroupInfoView: View {
                 }
                 .disabled(!model.online)
                 .accessibilityIdentifier("group-info.name-photo")
+                if room.isHosted {
+                    Button { model.roomContext() } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Room Context").foregroundStyle(model.online ? Color.hqLabel : Color.hqLabel3)
+                                if let purpose = room.hostedContext?.purpose.trimmingCharacters(in: .whitespacesAndNewlines), !purpose.isEmpty {
+                                    Text(purpose)
+                                        .font(Font.hq(.footnote))
+                                        .foregroundStyle(Color.hqLabel2)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                            chevron
+                        }
+                    }
+                    .disabled(!model.online)
+                    .accessibilityIdentifier("group-info.context")
+                }
                 Button(model.unread ? "Mark as Read" : "Mark as Unread") { model.toggleUnread() }
                     .accessibilityIdentifier("group-info.unread")
             } header: { HQSectionLabel { Text("Group Chat") } }
+
+            let localSeats = seats.filter(\.canDrive)
+            if !localSeats.isEmpty, GroupInfoModel.showsApprovalModes(for: room, hasHostedRooms: model.store?.hostedRooms != nil) {
+                Section {
+                    ForEach(localSeats, id: \.key) { seat in
+                        let unavailable = model.approvalModeLoadFailed.contains(seat.name)
+                        let current = model.memberApprovalModes[seat.name]
+                        let busy = model.savingApprovalProfile.contains(seat.name)
+                        if unavailable {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(seat.display).foregroundStyle(Color.hqLabel)
+                                    Text("Applies to all of \(seat.display)’s chats")
+                                        .font(Font.hq(.caption))
+                                        .foregroundStyle(Color.hqLabel2)
+                                }
+                                Spacer()
+                                Text("Unavailable").foregroundStyle(Color.hqLabel2)
+                            }
+                            .accessibilityIdentifier("group-info.approval-mode.\(seat.name)")
+                            .accessibilityValue("Unavailable")
+                        } else {
+                            Menu {
+                                ForEach(["manual", "smart", "off"], id: \.self) { mode in
+                                    Button(role: mode == "off" ? .destructive : nil) {
+                                        model.pickMemberApprovalMode(mode, for: seat)
+                                    } label: {
+                                        if current == mode {
+                                            Label(GroupInfoModel.approvalModeTitle(mode), systemImage: "checkmark")
+                                        } else {
+                                            Text(GroupInfoModel.approvalModeTitle(mode))
+                                        }
+                                    }
+                                }
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(seat.display).foregroundStyle(Color.hqLabel)
+                                        Text("Applies to all of \(seat.display)’s chats")
+                                            .font(Font.hq(.caption))
+                                            .foregroundStyle(Color.hqLabel2)
+                                    }
+                                    Spacer()
+                                    if busy {
+                                        ProgressView().controlSize(.small)
+                                    } else {
+                                        Text(GroupInfoModel.approvalModeTitle(current)).foregroundStyle(Color.hqLabel2)
+                                    }
+                                    Image(systemName: "chevron.up.chevron.down").font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel3)
+                                }
+                            }
+                            .disabled(!model.online || busy)
+                            .accessibilityIdentifier("group-info.approval-mode.\(seat.name)")
+                            .accessibilityValue(GroupInfoModel.approvalModeTitle(current))
+                        }
+                    }
+                } header: { HQSectionLabel {
+                    Text("Approval Mode per Bot")
+                } } footer: { HQSectionFooter {
+                    Text("Each bot follows its own profile approval mode across all of its chats, not just this group.")
+                } }
+            }
 
             Section {
                 Menu {
@@ -593,6 +758,215 @@ struct GroupNamePhotoView: View {
         .contentMargins(.top, 0, for: .scrollContent)
         .disabled(model.saving)
         .navigationBarBackButtonHidden(true)
+    }
+}
+
+// MARK: - Room Context (groups.context, Hermes 0.23.2+)
+
+@MainActor @Observable
+final class GroupContextModel {
+    let uid: UUID
+    let original: HostedRoomContext
+    var purpose: String
+    var notes: String
+    var routing: String
+    var leadMemberId: String
+    var saving = false
+    var problem: String?
+    @ObservationIgnored let services: any GroupServices
+
+    init(uid: UUID, services: any GroupServices) {
+        self.uid = uid
+        self.services = services
+        let room = services.groupStore?.room(uid: uid)
+        let ctx = room?.hostedContext ?? HostedRoomContext()
+        original = ctx
+        purpose = ctx.purpose
+        notes = ctx.notes
+        routing = ctx.routing
+        leadMemberId = ctx.leadMemberId
+    }
+
+    var room: GroupRoom? { services.groupStore?.room(uid: uid) }
+    var seats: [GroupSeat] { room.flatMap { services.groupStore?.seated($0) } ?? [] }
+    var supportsAutoRouting: Bool { room?.routingModes?.contains("auto") == true }
+    var notesBytes: Int { HostedRoomContext.notesUTF8Count(notes) }
+    var notesOverLimit: Bool { notesBytes > HostedRoomContext.maxNotesBytes }
+    var hasChanges: Bool {
+        purpose != original.purpose || notes != original.notes
+            || routing != original.routing || leadMemberId != original.leadMemberId
+    }
+}
+
+final class GroupContextController: UIHostingController<HQScaledRoot<GroupContextView>>, EditingPage {
+    let model: GroupContextModel
+    private var saveItem: UIBarButtonItem!
+
+    init(uid: UUID, services: any GroupServices) {
+        let model = GroupContextModel(uid: uid, services: services)
+        self.model = model
+        super.init(rootView: HQScaledRoot(GroupContextView(model: model)))
+        title = "Room Context"
+        navigationItem.largeTitleDisplayMode = .never
+        navigationItem.hidesBackButton = true
+        navigationItem.leftBarButtonItem = UIBarButtonItem.hqClose(.cancel, action: UIAction { [weak self] _ in
+            self?.confirmLeaving { self?.navigationController?.popViewController(animated: true) }
+        })
+        saveItem = UIBarButtonItem(title: "Save", style: .prominent, target: self, action: #selector(save))
+        saveItem.accessibilityIdentifier = "group-context.save"
+        navigationItem.rightBarButtonItem = saveItem
+        observe()
+    }
+
+    @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    var hasChanges: Bool { model.hasChanges }
+
+    private func observe() {
+        withObservationTracking {
+            _ = model.hasChanges
+            _ = model.saving
+            _ = model.notesOverLimit
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.refreshBar()
+                self.observe()
+            }
+        }
+        refreshBar()
+    }
+
+    private func refreshBar() {
+        saveItem.title = model.saving ? "Saving…" : "Save"
+        saveItem.setProminentEnabled(model.hasChanges && !model.saving && !model.notesOverLimit)
+        navigationItem.leftBarButtonItem?.isEnabled = !model.saving
+        updateModalLock()
+    }
+
+    @objc private func save() {
+        guard model.hasChanges, !model.saving, !model.notesOverLimit,
+              let store = model.services.groupStore, let key = store.key(model.uid),
+              let hosted = store.hostedRooms else { return }
+        view.endEditing(true)
+        model.problem = nil
+        model.saving = true
+        let purpose = model.purpose
+        let notes = model.notes
+        let routing = model.routing
+        let lead = routing == "lead" ? model.leadMemberId : ""
+        Task {
+            defer { model.saving = false }
+            do {
+                try await hosted.setContext(key, purpose: purpose, notes: notes, routing: routing, leadMemberId: lead)
+                Haptics.play(.success)
+                navigationController?.isModalInPresentation = false
+                navigationController?.popViewController(animated: true)
+            } catch {
+                model.problem = (error as? LocalizedError)?.errorDescription ?? "Couldn’t save room context."
+                FailureAlert.present(error, fallbackTitle: "Couldn’t Save Context", from: self) { self.save() }
+            }
+        }
+    }
+}
+
+struct GroupContextView: View {
+    @Bindable var model: GroupContextModel
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("What this group chat is for", text: $model.purpose, axis: .vertical)
+                    .lineLimit(2...5)
+                    .accessibilityIdentifier("group-context.purpose")
+            } header: { HQSectionLabel {
+                Text("Purpose")
+            } }
+            Section {
+                TextEditor(text: $model.notes)
+                    .frame(minHeight: 120)
+                    .font(Font.hq(.body))
+                    .accessibilityIdentifier("group-context.notes")
+            } header: { HQSectionLabel {
+                Text("Shared Notes")
+            } } footer: { HQSectionFooter {
+                let over = model.notesOverLimit
+                Text("\(model.notesBytes) / \(HostedRoomContext.maxNotesBytes) bytes")
+                    .foregroundStyle(over ? Color.hqRed : Color.hqLabel2)
+            } }
+            Section {
+                Menu {
+                    routingOption("everyone", title: "Everyone")
+                    routingOption("lead", title: "Lead Bot")
+                    if model.supportsAutoRouting { routingOption("auto", title: "Automatic") }
+                } label: {
+                    HStack {
+                        Text("Routing").foregroundStyle(Color.hqLabel)
+                        Spacer()
+                        Text(routingLabel(model.routing)).foregroundStyle(Color.hqLabel2)
+                        Image(systemName: "chevron.up.chevron.down").font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel3)
+                    }
+                }
+                .accessibilityIdentifier("group-context.routing")
+                if model.routing == "lead" {
+                    Menu {
+                        ForEach(model.seats, id: \.key) { seat in
+                            let memberId = HostedRoomLog.memberId(seat.descriptor)
+                            Button { model.leadMemberId = memberId } label: {
+                                if model.leadMemberId == memberId {
+                                    Label(seat.display, systemImage: "checkmark")
+                                } else {
+                                    Text(seat.display)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text("Lead Bot").foregroundStyle(Color.hqLabel)
+                            Spacer()
+                            Text(leadName).foregroundStyle(Color.hqLabel2)
+                            Image(systemName: "chevron.up.chevron.down").font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel3)
+                        }
+                    }
+                    .accessibilityIdentifier("group-context.lead")
+                }
+            } header: { HQSectionLabel {
+                Text("Routing")
+            } } footer: { HQSectionFooter {
+                if let problem = model.problem {
+                    Text(problem).foregroundStyle(Color.hqRed)
+                } else {
+                    Text("Every bot sees the purpose and shared notes on each turn.")
+                }
+            } }
+        }
+        .hqGroupedPage()
+        .contentMargins(.top, 0, for: .scrollContent)
+        .disabled(model.saving)
+        .navigationBarBackButtonHidden(true)
+    }
+
+    private func routingOption(_ value: String, title: String) -> some View {
+        Button {
+            model.routing = value
+            if value == "lead", model.leadMemberId.isEmpty, let first = model.seats.first {
+                model.leadMemberId = HostedRoomLog.memberId(first.descriptor)
+            }
+        } label: {
+            if model.routing == value { Label(title, systemImage: "checkmark") } else { Text(title) }
+        }
+    }
+
+    private func routingLabel(_ value: String) -> String {
+        switch value {
+        case "lead": return "Lead Bot"
+        case "auto": return "Automatic"
+        default: return "Everyone"
+        }
+    }
+
+    private var leadName: String {
+        model.seats.first { HostedRoomLog.memberId($0.descriptor) == model.leadMemberId }?.display ?? "Choose Bot"
     }
 }
 

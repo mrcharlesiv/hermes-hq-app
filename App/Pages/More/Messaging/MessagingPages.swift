@@ -173,10 +173,12 @@ struct MessagingListView: View {
 
     @ViewBuilder private var list: some View {
         let rows = model.shown
-        if model.platforms.isEmpty, !model.showsBotPicker {
+        let catalogRows = model.shownAvailable
+        let hasAny = !model.platforms.isEmpty || !model.available.isEmpty
+        if !hasAny, !model.showsBotPicker {
             MoreEmptyState(symbol: "bubble.left.and.bubble.right", title: "No Messaging Apps",
                            text: "This gateway has no messaging apps to set up.")
-        } else if model.platforms.isEmpty, DeviceWord.isMac {
+        } else if !hasAny, DeviceWord.isMac {
             // [mac] Stress test 2026-10-28 #9: centred under the picker, no card, in both looks.
             MoreStateUnderPicker(bots: model.context.botChoices, selection: profile) {
                 MoreEmptyState(symbol: "bubble.left.and.bubble.right", title: "No Messaging Apps",
@@ -185,31 +187,50 @@ struct MessagingListView: View {
         } else {
             List { Group {
                 picker
-                if model.platforms.isEmpty {
+                if !hasAny {
                     Section {
                         MoreEmptyState(symbol: "bubble.left.and.bubble.right", title: "No Messaging Apps",
                                        text: "This gateway has no messaging apps to set up.")
                             .hqListedEmptyState(minHeight: 320)   // [mac] Stress test 2026-10-28 #9
                             .listRowBackground(Color.clear)
                     }
-                } else if rows.isEmpty {
+                } else if rows.isEmpty, catalogRows.isEmpty {
                     Section {
                         ContentUnavailableView.search(text: model.query)
                             .hqListedEmptyState(minHeight: 280)   // [mac] Stress test 2026-10-28 #9
                             .listRowBackground(Color.clear)
                     }
                 } else {
-                    Section {
-                        ForEach(rows) { platform in
-                            Button { MessagingPages.open(platform, model: model) } label: { MessagingRow(platform: platform) }
-                                .accessibilityIdentifier("messaging.row.\(platform.id)")
-                        }
-                    } header: { HQSectionLabel {
-                        // The scope: these are this bot's apps (Status & Maintenance lists the whole gateway's).
-                        Text("For \(model.context.botName(model.profile))")
-                    } } footer: { HQSectionFooter {
-                        if !model.online, !model.readOnly { Text(MorePages.offlineFooter) }
-                    } }
+                    if !rows.isEmpty {
+                        Section {
+                            ForEach(rows) { platform in
+                                Button { MessagingPages.open(platform, model: model) } label: { MessagingRow(platform: platform) }
+                                    .accessibilityIdentifier("messaging.row.\(platform.id)")
+                            }
+                        } header: { HQSectionLabel {
+                            // The scope: these are this bot's apps (Status & Maintenance lists the whole gateway's).
+                            Text("For \(model.context.botName(model.profile))")
+                        } } footer: { HQSectionFooter {
+                            if !model.online, !model.readOnly { Text(MorePages.offlineFooter) }
+                        } }
+                    }
+                    if !catalogRows.isEmpty, !model.readOnly {
+                        Section {
+                            ForEach(catalogRows) { item in
+                                MessagingCatalogRow(
+                                    item: item,
+                                    installing: model.installingCatalog.contains(item.name),
+                                    canWrite: model.canWrite
+                                ) {
+                                    model.askInstallCatalog(item)
+                                }
+                            }
+                        } header: { HQSectionLabel {
+                            Text("Available to Install")
+                        } } footer: { HQSectionFooter {
+                            Text("Catalog messaging plugins install directly into \(model.botName).")
+                        } }
+                    }
                 }
             }.hqMacSettingsRowInsets() }
             .settingsList()
@@ -217,6 +238,66 @@ struct MessagingListView: View {
             .refreshable { await model.refresh() }
             .accessibilityIdentifier("messaging.list")
         }
+    }
+}
+
+struct MessagingCatalogRow: View {
+    var item: MessagingCatalogPlatform
+    var installing: Bool
+    var canWrite: Bool
+    var install: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "arrow.down.circle")
+                .font(Font.hq(.body))
+                .foregroundStyle(Color.hqLabel2)
+                .frame(width: 30, height: 30)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(item.title)
+                        .font(Font.hq(.body))
+                        .foregroundStyle(Color.hqLabel)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(item.badgeWord)
+                        .font(Font.hq(.caption2).weight(.semibold))
+                        .foregroundStyle(Color.hqLabel2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.hqFill3, in: Capsule())
+                }
+                if !item.summary.isEmpty {
+                    Text(item.summary)
+                        .font(Font.hq(.subheadline))
+                        .foregroundStyle(Color.hqLabel2)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if item.isBlocked, !item.blockedReason.isEmpty {
+                    Text(item.blockedReason)
+                        .font(Font.hq(.caption))
+                        .foregroundStyle(Color.hqOrange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            if installing {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(minWidth: 52)
+                    .accessibilityLabel("Installing \(item.title)")
+            } else {
+                Button(item.isBlocked ? "Details" : "Install", action: install)
+                    .hqRowActionButtonStyle()
+                    .disabled(!canWrite)
+                    .accessibilityLabel(item.isBlocked ? "Details for \(item.title)" : "Install \(item.title)")
+                    .accessibilityIdentifier("messaging.catalog.\(item.name)")
+            }
+        }
+        .padding(.vertical, DeviceWord.isMac ? 0 : 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("messaging.catalog.row.\(item.name)")
     }
 }
 
@@ -330,11 +411,20 @@ struct MessagingPlatformView: View {
                     Text("Hermes creates the bot and finds your Telegram user ID for you. You confirm it in Telegram.")
                 } }
             }
+            if let hint = model.credentialsHint(for: platform.id), !model.readOnly {
+                Section {
+                    Label(hint, systemImage: "key.fill")
+                        .font(Font.hq(.subheadline))
+                        .foregroundStyle(Color.hqOrange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("messaging.platform.credentials-hint")
+                }
+            }
             if model.showsRestartNotice {
                 if case .finished(ok: true, _) = model.restart.phase, !model.restartNeeded {
                     Section { GatewayRestartProgress(run: model.restart).padding(.vertical, 6) }
                 } else {
-                    GatewayRestartNotice(run: model.restart, canWrite: model.canWrite) { model.askRestart() }
+                    GatewayRestartNotice(text: model.restartNoticeText(for: platform.id), run: model.restart, canWrite: model.canWrite) { model.askRestart() }
                 }
             }
             Section {

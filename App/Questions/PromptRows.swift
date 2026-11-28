@@ -71,6 +71,13 @@ nonisolated struct ApprovalCardRow: Sendable, Equatable, Hashable {
     var asker: String? = nil
     /// The chat's bot, for "Ask Ivy to try again" (nil: "the bot").
     var botName: String? = nil
+    /// [v0.23.4] Sandbox approval card kind and fields (`access` / `network`).
+    var kind: ApprovalKind = .command
+    var path: String? = nil
+    var access: ApprovalAccessLevel? = nil
+    var host: String? = nil
+    var label: String? = nil
+    var risk: String? = nil
 }
 
 nonisolated struct PromptRow: Sendable {
@@ -398,13 +405,59 @@ nonisolated enum PromptLayout {
 
     static func approvalTitle(_ a: ApprovalCardRow) -> String {
         if a.stackExpired { return "Approval expired" }
-        // [groups] A room names the member whose turn waits (docs/spec/3x-groups.md §7.10).
-        if let asker = a.asker, !asker.isEmpty {
-            let first = a.command.split(whereSeparator: \.isNewline).first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
-            if first.isEmpty { return "\(asker) needs your approval" }
-            return "\(asker) wants to run: \(first.count > 60 ? String(first.prefix(60)) + "…" : first)"
+        switch a.kind {
+        case .access:
+            if let asker = a.asker, !asker.isEmpty { return "\(asker) needs folder access" }
+            return "Folder access needed"
+        case .network:
+            if let asker = a.asker, !asker.isEmpty { return "\(asker) needs website access" }
+            return "Website access needed"
+        case .command:
+            // [groups] A room names the member whose turn waits (docs/spec/3x-groups.md §7.10).
+            if let asker = a.asker, !asker.isEmpty {
+                let first = a.command.split(whereSeparator: \.isNewline).first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
+                if first.isEmpty { return "\(asker) needs your approval" }
+                return "\(asker) wants to run: \(first.count > 60 ? String(first.prefix(60)) + "…" : first)"
+            }
+            return "Approval needed"
         }
-        return "Approval needed"
+    }
+
+    static func approvalGlyph(_ kind: ApprovalKind) -> String {
+        switch kind {
+        case .command: "apple.terminal.circle.fill"
+        case .access: "folder.circle.fill"
+        case .network: "globe"
+        }
+    }
+
+    static func approvalMetaLabel(_ a: ApprovalCardRow) -> String {
+        switch a.kind {
+        case .access:
+            switch a.access {
+            case .readWrite: "Read & write access"
+            case .read: "Read-only access"
+            case nil: "Folder access"
+            }
+        case .network: "Website"
+        case .command: a.showsDescription ? "Command details" : "Command"
+        }
+    }
+
+    static func approvalDetails(_ a: ApprovalCardRow) -> String {
+        switch a.kind {
+        case .access:
+            return (a.path ?? a.description).trimmingCharacters(in: .whitespacesAndNewlines)
+        case .network:
+            let host = (a.host ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let label = (a.label ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !label.isEmpty && !host.isEmpty && label.caseInsensitiveCompare(host) != .orderedSame {
+                return "\(label)\n\(host)"
+            }
+            return (!label.isEmpty ? label : host)
+        case .command:
+            return (a.showsDescription ? a.description : a.command).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     /// Under an expired card: whom to ask names the bot (or, in a room, the member whose turn asked).
@@ -413,14 +466,14 @@ nonisolated enum PromptLayout {
         return "This request expired. Ask \(who ?? "the bot") to try again."
     }
 
-    static func buttonTitle(_ button: ApprovalButton) -> String {
+    static func buttonTitle(_ button: ApprovalButton, approvalKind: ApprovalKind = .command) -> String {
         switch button {
-        case .reject: "Reject"
+        case .reject: approvalKind == .command ? "Reject" : "Deny"
         case .dismiss: "Dismiss"
         case .more: "More…"
         case .session: "Allow for This Chat"
         case .always: "Always Allow…"
-        case .run: "Run"
+        case .run: approvalKind == .command ? "Run" : "Allow"
         }
     }
 
@@ -442,18 +495,19 @@ nonisolated enum PromptLayout {
         var texts: [PromptPlacedText] = []
         let cardTop = gap + 6
 
-        // Every card's header: a round terminal mark (grey once expired) and "Approval needed".
-        let head = noteHeader(approvalTitle(a), glyph: "apple.terminal.circle.fill", dim: a.expired, x: side + innerX, y: cardTop + notePadV,
+        // Every card's header: round mark (terminal / folder / globe, grey once expired) and title.
+        let head = noteHeader(approvalTitle(a), glyph: approvalGlyph(a.kind), dim: a.expired, x: side + innerX, y: cardTop + notePadV,
                               width: innerW, category: category)
         texts.append(head.text)
 
-        // The line under it: "Command" / "Command details", "1 / 2", the expiry (trailing, updated in place).
+        // The line under it: "Command" / "Read-only access" / "Website", "1 / 2", the expiry (trailing, updated in place).
         var cy: CGFloat = head.maxY - cardTop + 10
         let footnote = PromptFonts.font(.footnote, category)
         // The header line is meta: capped at 24 pt so "Command" and the countdown stay readable at AX sizes.
         let meta = PromptFonts.font(.footnote, category, cap: 24)
         let lineH = ceil(meta.lineHeight)
-        let label = TextKitLayout(text(a.showsDescription ? "Command details" : "Command", meta, ChatPalette.label2), width: innerW)
+        let metaText = approvalMetaLabel(a)
+        let label = TextKitLayout(text(metaText, meta, ChatPalette.label2), width: innerW)
         let labelFrame = CGRect(x: innerX, y: cy + (lineH - label.size.height) / 2, width: label.size.width, height: label.size.height)
         texts.append(PromptPlacedText(text: label, frame: labelFrame.offsetBy(dx: side, dy: cardTop)))
         var trailing = innerX + innerW
@@ -478,15 +532,15 @@ nonisolated enum PromptLayout {
         }
         cy += lineH + 8
 
-        // The command (monospaced, ≤ 8 lines, wrapping anywhere) or the description, on an inset panel.
-        let details = (a.showsDescription ? a.description : a.command).trimmingCharacters(in: .whitespacesAndNewlines)
+        // The command/path/website (monospaced for commands and folder paths, ≤ 8 lines), on an inset panel.
+        let details = approvalDetails(a)
         var showAllFrame: CGRect?
         var paper: CGRect?
         if !details.isEmpty {
             let pad: CGFloat = 12, wordsX = innerX + pad, wordsW = innerW - 2 * pad
             let paperTop = cy
             cy += pad
-            let font = a.showsDescription ? footnote : PromptFonts.mono(category)
+            let font = (a.showsDescription || a.kind == .network) ? footnote : PromptFonts.mono(category)
             let (body, cut) = clamped(text(details, font, ChatPalette.label, wrapAnywhere: true), width: wordsW, maxLines: PromptRows.commandClampLines)
             texts.append(PromptPlacedText(text: body, frame: CGRect(x: wordsX, y: cy, width: wordsW, height: body.size.height).offsetBy(dx: side, dy: cardTop)))
             cy += body.size.height
@@ -500,8 +554,8 @@ nonisolated enum PromptLayout {
             cy += pad
             paper = CGRect(x: innerX, y: paperTop, width: innerW, height: cy - paperTop).offsetBy(dx: side, dy: cardTop)
         }
-        // The reason under a shown command.
-        let reason = a.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The risk line (sandbox cards) or reason under a shown command.
+        let reason = (a.risk ?? a.description).trimmingCharacters(in: .whitespacesAndNewlines)
         if !a.showsDescription && !reason.isEmpty {
             let r = TextKitLayout(text(reason, footnote, ChatPalette.label2), width: innerW)
             texts.append(PromptPlacedText(text: r, frame: CGRect(x: innerX, y: cy + 8, width: innerW, height: r.size.height).offsetBy(dx: side, dy: cardTop)))
@@ -513,12 +567,12 @@ nonisolated enum PromptLayout {
             cy += 6 + e.size.height
         }
 
-        // Actions: one trailing row, or full-width stacked (Run first) at accessibility sizes or when they don't fit.
+        // Actions: one trailing row, or full-width stacked (Run/Allow first) at accessibility sizes or when they don't fit.
         let font = PromptFonts.button(category)
         let order = buttons(a)
         let h = max(44, ceil(font.lineHeight) + 16)
         func titleWidth(_ b: ApprovalButton) -> CGFloat {
-            let titleW = ceil((buttonTitle(b) as NSString).size(withAttributes: [.font: font]).width)
+            let titleW = ceil((buttonTitle(b, approvalKind: a.kind) as NSString).size(withAttributes: [.font: font]).width)
             // Insets 14 + 14, a little slack for the configuration's own rounding, the chevron and its padding.
             return titleW + 32 + (b == .more ? 8 + ceil(font.pointSize * 1.05) : 0)
         }
@@ -549,7 +603,7 @@ nonisolated enum PromptLayout {
         let buttonsInRow = placed.map { ($0.0, $0.1.offsetBy(dx: side, dy: cardTop)) }
         // 8 pt under the card: at the newest end its buttons sit 16 pt above the composer (§4.2 jump target).
         let height = ceil(card.maxY + 8)
-        let spoken = [a.asker == nil ? "Approval needed" : approvalTitle(a), a.showsDescription ? "Command details: \(details)" : "Command: \(details)",
+        let spoken = [approvalTitle(a), "\(metaText): \(details)",
                       (!a.showsDescription && !reason.isEmpty) ? reason : nil,
                       a.expired ? expiredNote(a) : nil].compactMap { $0 }.joined(separator: ". ")
         let layout = PromptRowLayout(cardFrame: card, texts: texts,

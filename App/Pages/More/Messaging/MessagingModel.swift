@@ -32,12 +32,17 @@ final class MessagingModel {
     /// the page then shows the state alone: no Bot picker and no search over a page with nothing to pick or search.
     var isUnavailable: Bool { if case .failed(let reason) = phase { return reason == MoreWire.olderHermes } else { return false } }
     private(set) var platforms: [MessagingPlatform] = []
+    private(set) var available: [MessagingCatalogPlatform] = []
     private(set) var pairing = MessagingPairing()
     private(set) var online: Bool
     /// Writes on their way: "platform:<id>", "person:<id>".
     private(set) var busy: Set<String> = []
+    private(set) var installingCatalog: Set<String> = []
     private(set) var tests: [String: TestState] = [:]
+    private(set) var restartPending: Set<String> = []
     private(set) var restartNeeded = false
+    private(set) var restartReasons: [String: String] = [:]
+    private(set) var credentialsHints: [String: String] = [:]
     let restart: GatewayActionRun
     var query = ""
     var profile: String {
@@ -45,12 +50,17 @@ final class MessagingModel {
             guard profile != oldValue else { return }
             MoreBotChoice.save(profile, page: "messaging", context: context)
             platforms = []
+            available = []
             pairing = MessagingPairing()
             tests = [:]
             // Audit 863 (08d-2): the last bot's writes still on their way drop their answer: their busy marks go too
             // (the keys, "platform:telegram", are the same on every bot).
             busy = []
+            installingCatalog = []
+            restartPending = []
             restartNeeded = false
+            restartReasons = [:]
+            credentialsHints = [:]
             restart.reset()
             phase = .loading
             reload()
@@ -60,6 +70,7 @@ final class MessagingModel {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var linkTask: Task<Void, Never>?
+    @ObservationIgnored private var eventsTask: Task<Void, Never>?
     @ObservationIgnored private var firstRead = true
 
     init(context: MorePages.Context) {
@@ -71,7 +82,14 @@ final class MessagingModel {
         profile = MoreBotChoice.read("messaging", context: context)
         restart.onFinish = { [weak self] ok in
             guard let self else { return }
-            if ok { PagesHaptics.success(); self.restartNeeded = false } else { PagesHaptics.error() }
+            if ok {
+                PagesHaptics.success()
+                self.restartPending = []
+                self.restartNeeded = false
+                self.restartReasons = [:]
+            } else {
+                PagesHaptics.error()
+            }
             self.reload()
         }
     }
@@ -89,13 +107,49 @@ final class MessagingModel {
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
         }
     }
+    var shownAvailable: [MessagingCatalogPlatform] {
+        available.filter { $0.matches(query) }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
     func platform(_ id: String) -> MessagingPlatform? { platforms.first { $0.id == id } }
     func isBusy(_ key: String) -> Bool { busy.contains(key) }
     var showsRestartNotice: Bool { !readOnly && (restartNeeded || restart.phase != .idle) }
+    var restartNoticeText: String { restartNoticeText(for: nil) }
+
+    func restartNoticeText(for platformId: String?) -> String {
+        let reason: String? = if let platformId {
+            restartReasons[platformId] ?? restartReasons.values.first
+        } else {
+            restartReasons.values.first
+        }
+        if let reason, !reason.isEmpty {
+            return "Restart your gateway to use this change (\(reason))."
+        }
+        return "Restart your gateway to use this change."
+    }
+
+    func credentialsHint(for platformId: String) -> String? { credentialsHints[platformId] }
+
+    private func recordLiveApply(_ platformId: String, _ result: MessagingUpdateResult) {
+        if result.needsCredentials {
+            restartPending.remove(platformId)
+            restartReasons[platformId] = nil
+            let detail = result.restartDetail?.trimmingCharacters(in: .whitespacesAndNewlines)
+            credentialsHints[platformId] = (detail?.isEmpty == false ? detail : nil) ?? "Add the required credentials below to finish setup."
+        } else if result.appliedLive {
+            restartPending.remove(platformId)
+            restartReasons[platformId] = nil
+            credentialsHints[platformId] = nil
+        } else {
+            restartPending.insert(platformId)
+            restartReasons[platformId] = result.restartDetail
+            credentialsHints[platformId] = nil
+        }
+        restartNeeded = !restartPending.isEmpty
+    }
 
     // MARK: Reading
 
-    /// The page came on screen: read (again), and follow the link so a gateway coming back refreshes the page.
+    /// The page came on screen: read (again), and follow the link and `platforms.changed` events.
     func appear() {
         if linkTask == nil {
             let client = context.client
@@ -110,12 +164,24 @@ final class MessagingModel {
                 }
             }
         }
+        if eventsTask == nil {
+            let client = context.client
+            let stream: AsyncStream<GatewayEvent> = (client as? LiveGatewayClient)?.events(matching: ["platforms.changed"]) ?? client.events()
+            eventsTask = Task { [weak self] in
+                for await event in stream {
+                    guard let self else { return }
+                    if event.type == "platforms.changed" { self.reload() }
+                }
+            }
+        }
         reload()
     }
 
     func disappear() {
         linkTask?.cancel()
         linkTask = nil
+        eventsTask?.cancel()
+        eventsTask = nil
     }
 
     func reload() {
@@ -136,12 +202,13 @@ final class MessagingModel {
         let mine = generation, profile = profile, api = api
         async let people = try? api.pairing(profile: profile)
         do {
-            let rows = try await api.platforms(profile: profile)
+            let page = try await api.platformsPage(profile: profile)
             let pairs = await people
             guard mine == generation, !Task.isCancelled else { return }
             if firstRead { firstRead = false; MorePages.noteRead("messaging", error: nil) }
-            platforms = rows
-            if profile == "default" { MorePages.noteMessaging(rows, account: context.account) }   // More's row
+            platforms = page.platforms
+            available = page.available
+            if profile == "default" { MorePages.noteMessaging(page.platforms, account: context.account) }   // More's row
             if let pairs { pairing = pairs }
             phase = .loaded
         } catch {
@@ -152,7 +219,63 @@ final class MessagingModel {
                 return
             }
             // A page that has shown data keeps showing it.
-            if platforms.isEmpty { phase = .failed(PagesREST.reason(error)) }
+            if platforms.isEmpty, available.isEmpty { phase = .failed(PagesREST.reason(error)) }
+        }
+    }
+
+    // MARK: Catalog install (v0.23.5)
+
+    func askInstallCatalog(_ item: MessagingCatalogPlatform) {
+        guard canWrite, !installingCatalog.contains(item.name) else { return }
+        if item.isBlocked {
+            let reason = item.blockedReason.isEmpty ? "Install is blocked by gateway policy." : item.blockedReason
+            let detail = item.installCommand.isEmpty ? nil : "Run in a terminal:\n\(item.installCommand)"
+            FailureAlert.present(title: "Can’t Install \(item.title) Here", reason: reason, detail: detail, from: front ?? host)
+            return
+        }
+        var lines: [String] = []
+        if !item.summary.isEmpty { lines.append(item.summary) }
+        if !item.disclosure.isEmpty { lines.append(item.disclosure) }
+        lines.append("Hermes will install and enable this plugin for \(botName). This can take a minute.")
+        TextPrompt.confirmPlain(title: "Install \(item.title)?",
+                                message: lines.joined(separator: "\n\n"),
+                                action: "Install", from: front ?? host) { [weak self] in
+            self?.runInstallCatalog(item)
+        }
+    }
+
+    private func runInstallCatalog(_ item: MessagingCatalogPlatform) {
+        guard canWrite, !installingCatalog.contains(item.name) else { return }
+        installingCatalog.insert(item.name)
+        let profile = profile, api = api
+        Task {
+            defer { installingCatalog.remove(item.name) }
+            do {
+                let result = try await api.installCatalog(item.name, profile: profile)
+                guard profile == self.profile else { return }
+                if result.ok {
+                    PagesHaptics.success()
+                    await refresh()
+                    if let host = front ?? host {
+                        PagesHUD.show("\(item.title) Installed",
+                                      detail: result.warnings.first,
+                                      symbol: "checkmark", from: host)
+                    }
+                    if let firstId = result.platforms.first, let installed = platform(firstId), front == nil {
+                        MessagingPages.open(installed, model: self)
+                    }
+                } else {
+                    PagesHaptics.error()
+                    let reason = result.error ?? "The gateway refused the install."
+                    let cmd = result.installCommand ?? (item.installCommand.isEmpty ? nil : item.installCommand)
+                    let detail = cmd.map { "Run in a terminal:\n\($0)" }
+                    FailureAlert.present(title: "Couldn’t Install \(item.title)", reason: reason, detail: detail, from: front ?? host)
+                }
+            } catch {
+                guard profile == self.profile else { return }
+                PagesHaptics.error()
+                FailureAlert.present(title: "Couldn’t Install \(item.title)", reason: PagesREST.reason(error), from: front ?? host)
+            }
         }
     }
 
@@ -168,10 +291,10 @@ final class MessagingModel {
         let profile = profile, api = api
         Task {
             do {
-                let hot = try await api.update(id, body: MessagingBodies.enabled(on), profile: profile)
+                let result = try await api.updateWithLive(id, body: MessagingBodies.enabled(on), profile: profile)
                 guard profile == self.profile else { return }
                 busy.remove("platform:\(id)")
-                if !hot { restartNeeded = true }
+                recordLiveApply(id, result)
                 reload()
             } catch {
                 guard profile == self.profile else { return }
@@ -190,18 +313,18 @@ final class MessagingModel {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw PagesMessageError("Type a value first.") }
         guard online else { throw PagesMessageError(MorePages.offlineFooter) }
-        let hot = try await api.update(platform, body: MessagingBodies.env(key, trimmed), profile: profile)
+        let result = try await api.updateWithLive(platform, body: MessagingBodies.env(key, trimmed), profile: profile)
         AppLog.note("messaging", "key saved")
-        if !hot { restartNeeded = true }
+        recordLiveApply(platform, result)
         await refresh()
     }
 
     /// `PUT {"clear_env":[KEY]}`.
     func removeKey(_ platform: String, _ key: String) async throws {
         guard online else { throw PagesMessageError(MorePages.offlineFooter) }
-        let hot = try await api.update(platform, body: MessagingBodies.clear(key), profile: profile)
+        let result = try await api.updateWithLive(platform, body: MessagingBodies.clear(key), profile: profile)
         AppLog.note("messaging", "key removed")
-        if !hot { restartNeeded = true }
+        recordLiveApply(platform, result)
         await refresh()
     }
 

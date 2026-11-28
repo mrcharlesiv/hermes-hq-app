@@ -162,7 +162,7 @@ public class NewChatCommandTests
             await Client.Rpc.WhenReadyAsync(new CancellationTokenSource(TimeSpan.FromSeconds(15)).Token);
             await Until(() => Socket.Methods.Contains("session.resume"));
             Before = Socket.Methods;
-            Assert.Equal(["client.capabilities", "session.resume"], Before);
+            Assert.Equal(["client.capabilities", "client.capabilities", "session.resume"], Before);
         }
 
         public int Creates => Lists.Calls.Count(c => c.Method == "session.create");

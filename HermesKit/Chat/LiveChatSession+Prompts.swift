@@ -21,16 +21,24 @@ extension LiveChatSession: ChatPrompting {
         // A login saved after the bot stopped waiting for it: the bot reads its vault only while a turn runs, so the
         // chat says so (a running reply takes it as a steer, an idle chat starts a turn).
         link.onLoginSavedLate = { [weak self] site in self?.send(LateLogin.message(site: site)) }
+        let client = self.client
+        link.onDetachActivity = { token in
+            (client as? ClientActivityReporting)?.setVisibleActivitySession(nil, token: token)
+        }
         promptLink = link
         if let rid = runtimeSessionId { promptRuntimeBound(rid) }
         link.isObserving = observing
+        if observing { reportClientActivity(active: true, runtime: runtimeSessionId) }
     }
 
     /// Called from `bindRuntime` (rule 8 lives in the centre).
     func promptRuntimeBound(_ runtime: String) {
         guard let link = promptLink, !link.covers(runtime) else { return }
         link.bind(runtime: runtime, profile: profile, profileParam: profileParam, storedId: storedSessionId ?? resolvedStoredId)
-        if observing { link.center?.replayApprovals(runtime) }
+        if observing {
+            link.center?.replayApprovals(runtime)
+            reportClientActivity(active: true, runtime: runtime)
+        }
     }
 
     /// Header words while a request waits (§3.6), after the link states and before "Working…".
@@ -39,7 +47,15 @@ extension LiveChatSession: ChatPrompting {
     /// `replay` false: a reconnect is about to confirm the runtime and replays the approvals itself (`approvalsConfirmed`).
     func promptsObserving(_ on: Bool, replay: Bool = true) {
         promptLink?.isObserving = on
+        reportClientActivity(active: on, runtime: runtimeSessionId)
         if on { if replay { promptsCameOnScreen() } else { probeOpenPrompts() } }
+    }
+
+    /// [v0.23.4] Registers or clears this chat's visible session in the connection-wide `client.activity` aggregator.
+    func reportClientActivity(active: Bool, runtime: String?) {
+        guard let reporter = client as? ClientActivityReporting, let token = promptLink?.activityToken else { return }
+        let session = active ? (runtime ?? storedSessionId) : nil
+        reporter.setVisibleActivitySession(session, token: token)
     }
 
     /// A reconnect's `session.activate` answered for this runtime (or its `session.resume` bound the one the link already
@@ -78,7 +94,15 @@ extension LiveChatSession: ChatPrompting {
     }
 
     func answerApproval(_ id: String, _ choice: ApprovalChoice) async throws {
-        try await promptLink?.center?.answerApproval(id, choice)
+        try await promptLink?.center?.answerApproval(id, choice, reason: nil)
+    }
+
+    func answerApproval(_ id: String, _ choice: ApprovalChoice, reason: String?) async throws {
+        try await promptLink?.center?.answerApproval(id, choice, reason: reason)
+    }
+
+    func approvalDisplayed(_ id: String) {
+        promptLink?.center?.markApprovalDisplayed(id)
     }
 
     func dismissExpiredApproval(_ id: String) { promptLink?.center?.dismissExpiredApproval(id) }

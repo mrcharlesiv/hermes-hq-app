@@ -11,18 +11,68 @@ import CryptoKit
 import UIKit
 import WebKit
 
+/// [v0.23.5] Hermes Cloud `/api/status` Webapp move fields (`webapp_state`, `webapp_url`).
+nonisolated struct CloudWebappStatus: Equatable, Sendable {
+    enum State: String, Equatable, Sendable {
+        case ready
+        case starting
+        case down
+        case notAvailable = "not_available"
+    }
+
+    var state: State
+    var url: URL?
+
+    init(state: State, url: URL? = nil) {
+        self.state = state
+        self.url = url
+    }
+
+    init?(status json: JSONValue, agentHost: String? = nil) {
+        guard let rawState = json["webapp_state"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let parsedState = State(rawValue: rawState) else { return nil }
+        var validatedURL: URL?
+        if let rawURL = json["webapp_url"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let candidate = URL(string: rawURL),
+           candidate.scheme?.lowercased() == "https",
+           let host = candidate.host?.lowercased(), !host.isEmpty {
+            let matchesAgent = agentHost.map { host == $0.lowercased() } ?? false
+            if matchesAgent || host == "nousresearch.com" || host.hasSuffix(".nousresearch.com") {
+                validatedURL = candidate
+            }
+        }
+        self.state = parsedState
+        self.url = validatedURL
+    }
+
+    var rowDetail: String {
+        switch state {
+        case .ready: CloudDesktopWeb.rowDetail
+        case .starting: "Hermes Desktop is starting on this agent. Try again in a moment."
+        case .down: "Hermes Desktop is currently offline on this agent."
+        case .notAvailable: "Hermes Desktop isn’t enabled on this agent yet."
+        }
+    }
+}
+
 enum CloudDesktopWeb {
-    static let title = "Hermes Desktop"
-    static let menuTitle = "Open Hermes Desktop"
-    static let rowDetail = "This agent’s full Desktop: chats, files, jobs and settings. Sign in with Nous once."
-    static let failedTitle = "Couldn’t Open Hermes Desktop"
-    static let failedBody = "The agent didn’t answer. Check that it’s running, then try again."
-    static let tooOldBody = "This agent’s Hermes is too old for Desktop in a browser. Update it on its page, then try again."
-    static let signOutTitle = "Sign Out of Hermes Desktop"
+    nonisolated static let title = "Hermes Desktop"
+    nonisolated static let menuTitle = "Open Hermes Desktop"
+    nonisolated static let rowDetail = "This agent’s full Desktop: chats, files, jobs and settings. Sign in with Nous once."
+    nonisolated static let failedTitle = "Couldn’t Open Hermes Desktop"
+    nonisolated static let failedBody = "The agent didn’t answer. Check that it’s running, then try again."
+    nonisolated static let tooOldBody = "This agent’s Hermes is too old for Desktop in a browser. Update it on its page, then try again."
+    nonisolated static let signOutTitle = "Sign Out of Hermes Desktop"
 
     /// The Webapp's address on a gateway Nous hosts (its root); nil for any other gateway (a self-hosted Webapp has its
     /// own port, off by default, which the app can't know).
     static func address(_ gateway: URL?) -> URL? {
+        address(gateway, webapp: nil)
+    }
+
+    /// Prefers the gateway's reported `webapp_url` (Hermes 0.23.5+) when present, else the agent's root Webapp URL.
+    static func address(_ gateway: URL?, webapp: CloudWebappStatus?) -> URL? {
+        if let explicit = webapp?.url { return explicit }
         guard let gateway, CloudGatewayFlow.isCloud(gateway), let host = gateway.host else { return nil }
         var parts = URLComponents()
         parts.scheme = "https"

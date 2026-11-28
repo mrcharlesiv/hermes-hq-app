@@ -121,6 +121,148 @@ nonisolated struct MessagingPlatform: Sendable, Equatable, Identifiable {
     }
 }
 
+/// A catalog platform offered under `GET /api/messaging/platforms` (`available[]`, Hermes 0.23.5+) that can be
+/// installed directly into the profile.
+nonisolated struct MessagingCatalogPlatform: Sendable, Equatable, Identifiable {
+    var name: String
+    var title: String
+    var summary: String
+    /// `"official"` or `"verified"`.
+    var badge: String
+    var disclosure: String
+    /// Empty when an in-app install is permitted; else a reason code (e.g. `"lazy_installs_off"`).
+    var blocked: String
+    var blockedReason: String
+    var installCommand: String
+    var id: String { name }
+
+    var isBlocked: Bool { !blocked.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var badgeWord: String { badge.lowercased() == "official" ? "Official" : "Verified" }
+
+    init(name: String, title: String = "", summary: String = "", badge: String = "verified", disclosure: String = "",
+         blocked: String = "", blockedReason: String = "", installCommand: String = "") {
+        self.name = name
+        self.title = title.isEmpty ? name : title
+        self.summary = summary
+        self.badge = badge.isEmpty ? "verified" : badge
+        self.disclosure = disclosure
+        self.blocked = blocked
+        self.blockedReason = blockedReason
+        self.installCommand = installCommand
+    }
+
+    init?(json: JSONValue) {
+        guard let name = json["name"]?.pgString?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return nil }
+        self.init(
+            name: name,
+            title: json["title"]?.string ?? "",
+            summary: json["summary"]?.string ?? "",
+            badge: json["badge"]?.string ?? "verified",
+            disclosure: json["disclosure"]?.string ?? "",
+            blocked: json["blocked"]?.string ?? "",
+            blockedReason: json["blocked_reason"]?.string ?? "",
+            installCommand: json["install_command"]?.string ?? ""
+        )
+    }
+
+    static func list(_ json: JSONValue) -> [MessagingCatalogPlatform] {
+        var seen = Set<String>()
+        return (json["available"]?.array ?? []).compactMap(MessagingCatalogPlatform.init(json:)).filter { seen.insert($0.name).inserted }
+    }
+
+    func matches(_ query: String) -> Bool {
+        let words = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !words.isEmpty else { return true }
+        return [name, title, summary].contains { $0.lowercased().contains(words) }
+    }
+}
+
+/// Answer to `POST /api/messaging/catalog/{name}/install` (Hermes 0.23.5+).
+nonisolated struct MessagingCatalogInstallResult: Sendable, Equatable {
+    var ok: Bool
+    var pluginName: String?
+    var platforms: [String]
+    var error: String?
+    var installCommand: String?
+    var warnings: [String]
+
+    init(ok: Bool, pluginName: String? = nil, platforms: [String] = [], error: String? = nil,
+         installCommand: String? = nil, warnings: [String] = []) {
+        self.ok = ok; self.pluginName = pluginName; self.platforms = platforms
+        self.error = error; self.installCommand = installCommand; self.warnings = warnings
+    }
+
+    init(json: JSONValue) {
+        let rawError = json["error"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawInstallCommand = json["install_command"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.init(
+            ok: json["ok"]?.bool ?? false,
+            pluginName: json["plugin_name"]?.pgString,
+            platforms: (json["platforms"]?.array ?? []).compactMap(\.pgString).filter { !$0.isEmpty },
+            error: rawError?.isEmpty == false ? rawError : nil,
+            installCommand: rawInstallCommand?.isEmpty == false ? rawInstallCommand : nil,
+            warnings: (json["warnings"]?.array ?? []).compactMap(\.string).filter { !$0.isEmpty }
+        )
+    }
+}
+
+/// Live-apply verdict returned on `PUT /api/messaging/platforms/{id}` (`live`, Hermes 0.23.5+).
+nonisolated struct MessagingLiveApply: Sendable, Equatable {
+    var applied: Bool
+    var state: String?
+    var detail: String?
+
+    init(applied: Bool, state: String? = nil, detail: String? = nil) {
+        self.applied = applied; self.state = state; self.detail = detail
+    }
+
+    init?(json: JSONValue?) {
+        guard let json, case .object = json else { return nil }
+        self.init(
+            applied: json["applied"]?.bool ?? false,
+            state: json["state"]?.string,
+            detail: json["detail"]?.string
+        )
+    }
+}
+
+/// Full result of `PUT /api/messaging/platforms/{id}` combining `live` (0.23.5+) and legacy `hot_served`.
+nonisolated struct MessagingUpdateResult: Sendable, Equatable {
+    var hotServed: Bool
+    var live: MessagingLiveApply?
+
+    init(hotServed: Bool = false, live: MessagingLiveApply? = nil) {
+        self.hotServed = hotServed; self.live = live
+    }
+
+    init(json: JSONValue) {
+        self.init(hotServed: json["hot_served"]?.bool ?? false, live: MessagingLiveApply(json: json["live"]))
+    }
+
+    /// Whether the running gateway applied the change itself without needing a restart (`live-apply.ts`).
+    var appliedLive: Bool { live?.applied ?? hotServed }
+
+    /// The gateway says the platform lacks credentials; restarting would not start it either.
+    var needsCredentials: Bool { live?.state?.trimmingCharacters(in: .whitespaces).lowercased() == "not_configured" }
+
+    /// Reason why the change could not be applied live, when provided by the gateway.
+    var restartDetail: String? {
+        guard live?.applied == false else { return nil }
+        let trimmed = live?.detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+nonisolated struct MessagingPlatformsPage: Sendable, Equatable {
+    var platforms: [MessagingPlatform]
+    var available: [MessagingCatalogPlatform]
+    var signature: String?
+
+    init(platforms: [MessagingPlatform], available: [MessagingCatalogPlatform] = [], signature: String? = nil) {
+        self.platforms = platforms; self.available = available; self.signature = signature
+    }
+}
+
 /// A platform's status line (spec §12; tones `V/lib/platform-status.ts`, words `V/i18n/en.ts` messaging.states, and
 /// the phone's "Status unknown" for a platform the running gateway never reported on, `S/messaging-state.ts`).
 nonisolated struct MessagingStatus: Sendable, Equatable {
@@ -365,28 +507,68 @@ nonisolated enum MessagingBodies {
 nonisolated struct MessagingAPI: Sendable {
     let client: any GatewayClient
 
-    func platforms(profile: String?) async throws -> [MessagingPlatform] {
+    func platformsPage(profile: String?) async throws -> MessagingPlatformsPage {
         let answer = try await PagesREST.json(client, "GET", "/api/messaging/platforms", query: MoreWire.profileQuery(profile), timeout: 30)
         guard answer["platforms"]?.array != nil else { throw PagesREST.unreadable(answer) }
         let list = MessagingPlatform.list(answer)
-        AppLog.trace("pages", "messaging platforms \(AppLog.tag(profile)): \(list.count), \(MessagingIssues.failing(list).count) failing")
-        return list
+        let available = MessagingCatalogPlatform.list(answer)
+        let sig = answer["signature"]?.pgString
+        AppLog.trace("pages", "messaging platforms \(AppLog.tag(profile)): \(list.count), \(available.count) catalog, \(MessagingIssues.failing(list).count) failing")
+        return MessagingPlatformsPage(platforms: list, available: available, signature: sig)
     }
 
-    /// Returns `hot_served`: the running gateway took the change at once, no restart needed.
-    @discardableResult
-    func update(_ platform: String, body: JSONValue, profile: String?) async throws -> Bool {
+    func platforms(profile: String?) async throws -> [MessagingPlatform] {
+        try await platformsPage(profile: profile).platforms
+    }
+
+    /// Lightweight digest polled or checked for platform list changes (`GET /api/messaging/platforms/signature`, 0.23.5+).
+    func signature(profile: String?) async throws -> String? {
+        let answer = try await PagesREST.json(client, "GET", "/api/messaging/platforms/signature", query: MoreWire.profileQuery(profile), timeout: 15)
+        return answer["signature"]?.pgString
+    }
+
+    /// Installs and enables one catalog platform into the profile (`POST /api/messaging/catalog/{name}/install`, 300 s deadline).
+    func installCatalog(_ name: String, profile: String?) async throws -> MessagingCatalogInstallResult {
+        let start = ContinuousClock.now
+        let path = "/api/messaging/catalog/\(PagesREST.segment(name))/install"
+        let query = MoreWire.profileQuery(profile)
+        let body = Data("{}".utf8)
+        do {
+            let data: Data
+            if let transfers = client as? any GatewayTransfers {
+                data = try await transfers.transfer("POST", path, query: query, body: body, contentType: "application/json", timeout: 300)
+            } else {
+                data = try await PagesREST.send(client, "POST", path, query: query, json: .object([:]), timeout: 300)
+            }
+            let answer = data.isEmpty ? JSONValue.null : try JSONValue.parse(data)
+            let result = MessagingCatalogInstallResult(json: answer)
+            AppLog.trace("config", "messaging catalog install \(name) in \(AppLog.ms(since: start)) ms: ok=\(result.ok)")
+            return result
+        } catch {
+            AppLog.note("config", "messaging catalog install \(name) failed after \(AppLog.ms(since: start)) ms: \(PagesREST.reason(error))")
+            throw error
+        }
+    }
+
+    /// Full update response carrying both `live` (0.23.5+) and legacy `hot_served`.
+    func updateWithLive(_ platform: String, body: JSONValue, profile: String?) async throws -> MessagingUpdateResult {
         let start = ContinuousClock.now
         do {
             let answer = try await PagesREST.json(client, "PUT", "/api/messaging/platforms/\(PagesREST.segment(platform))",
                                                   query: MoreWire.profileQuery(profile), json: body, timeout: 30)
-            let hotServed = answer["hot_served"]?.bool ?? false
-            AppLog.trace("config", "messaging \(platform) update ok in \(AppLog.ms(since: start)) ms, hot served \(hotServed)")
-            return hotServed
+            let result = MessagingUpdateResult(json: answer)
+            AppLog.trace("config", "messaging \(platform) update ok in \(AppLog.ms(since: start)) ms, live=\(result.appliedLive) state=\(result.live?.state ?? "-")")
+            return result
         } catch {
             AppLog.note("config", "messaging \(platform) update failed after \(AppLog.ms(since: start)) ms: \(PagesREST.reason(error))")
             throw error
         }
+    }
+
+    /// Returns whether the running gateway applied the change live (`live.applied` or legacy `hot_served`).
+    @discardableResult
+    func update(_ platform: String, body: JSONValue, profile: String?) async throws -> Bool {
+        try await updateWithLive(platform, body: body, profile: profile).appliedLive
     }
 
     func test(_ platform: String, profile: String?) async throws -> MessagingTestResult {

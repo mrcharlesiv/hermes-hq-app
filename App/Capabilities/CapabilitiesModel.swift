@@ -41,6 +41,11 @@ final class CapabilitiesModel {
     var skillsError: String?
     var skillsLoading = false
     var toggling: Set<String> = []
+    var locking: Set<String> = []
+    /// Hub skills with an upstream update (`GET /api/skills/hub/updates`, Hermes 0.23.2+).
+    var skillUpdates: [SkillHubUpdate] = []
+    var checkingSkillUpdates = false
+    var updatingSkills = false
     /// Official identifiers (or skill names, for an uninstall) whose action is running.
     var running: Set<String> = []
     /// [hub] The Skills Hub search (the desktop's `HubSkillsSection`): the query it answered, its results, the hub
@@ -103,6 +108,7 @@ final class CapabilitiesModel {
     @ObservationIgnored private var serverCache: [String: [McpServer]] = [:]
     @ObservationIgnored var skillsRefreshFailed = false
     @ObservationIgnored private var statusTimer: Task<Void, Never>?
+    @ObservationIgnored private var eventsTask: Task<Void, Never>?
     @ObservationIgnored private var waitTimer: Timer?
     @ObservationIgnored private nonisolated(unsafe) var updateObserver: NSObjectProtocol?
     private static let liveModels = NSHashTable<CapabilitiesModel>.weakObjects()
@@ -206,11 +212,26 @@ final class CapabilitiesModel {
     func appear() {
         load()
         startStatusTimer()
+        startSkillEvents()
     }
 
     func disappear() {
         statusTimer?.cancel(); statusTimer = nil
+        eventsTask?.cancel(); eventsTask = nil
         waitTimer?.invalidate(); waitTimer = nil
+    }
+
+    private func startSkillEvents() {
+        guard eventsTask == nil, let client = store?.client else { return }
+        let stream: AsyncStream<GatewayEvent> = (client as? LiveGatewayClient)?.events(matching: ["skills.changed"]) ?? client.events()
+        eventsTask = Task { [weak self] in
+            for await event in stream {
+                guard let self else { return }
+                if event.type == "skills.changed", self.tab == .skills || self.skills != nil {
+                    await self.reloadSkills()
+                }
+            }
+        }
     }
 
     private func profileChanged() {
@@ -221,6 +242,9 @@ final class CapabilitiesModel {
         catalog = catalogCache[profile]   // [directory]
         skillsError = nil
         serversError = nil
+        skillUpdates = []
+        checkingSkillUpdates = false
+        locking = []
         toolsets = toolCache[profile]; toolsError = nil; toolUsage = usageCache[profile]?.counts
         plugins = pluginCache[profile]; pluginsError = nil
         skillsNotice = nil; serversNotice = nil; pluginNotice = nil; refreshFailed = nil
@@ -388,6 +412,110 @@ final class CapabilitiesModel {
     func flip(_ name: String, _ enabled: Bool) {
         guard let index = skills?.firstIndex(where: { $0.name == name }) else { return }
         skills?[index].enabled = enabled
+    }
+
+    func flipLocked(_ name: String, _ locked: Bool) {
+        guard let index = skills?.firstIndex(where: { $0.name == name }) else { return }
+        skills?[index].locked = locked
+    }
+
+    /// Lock/unlock a skill against agent edits (`PUT /api/skills/lock`, Hermes 0.23.4+).
+    func setSkillLocked(_ skill: SkillInfo, locked: Bool) {
+        guard let service, !readOnly, !locking.contains(skill.name) else { return }
+        Haptics.play(.selection)
+        flipLocked(skill.name, locked)
+        locking.insert(skill.name)
+        let profile = self.profile
+        Task {
+            defer { locking.remove(skill.name) }
+            do {
+                try await service.setSkillLocked(skill.name, locked: locked, profile: profile)
+                AppLog.trace("plugins", "skill \(skill.name) set locked \(locked)")
+            } catch {
+                if profile == self.profile { flipLocked(skill.name, !locked) }
+                let reason = CapabilitiesStore.detail(error)
+                AppLog.note("plugins", "skill \(skill.name) set locked \(locked) failed: \(reason)")
+                FailureAlert.present(title: "Couldn’t \(locked ? "Lock" : "Unlock") \(DisplayName.title(skill.name))",
+                                     reason: reason, detail: "\(error)", from: presenter) {
+                    self.setSkillLocked(skill, locked: locked)
+                }
+            }
+            if profile == self.profile { await reloadSkills() }
+        }
+    }
+
+    /// Checks hub-installed skills for upstream updates (`GET /api/skills/hub/updates`, Hermes 0.23.2+).
+    func checkSkillUpdates(silent: Bool = false) {
+        guard let service, isConnected, !checkingSkillUpdates else { return }
+        let profile = self.profile
+        checkingSkillUpdates = true
+        Task {
+            defer { if profile == self.profile { checkingSkillUpdates = false } }
+            do {
+                let updates = try await service.skillUpdates(profile)
+                guard profile == self.profile else { return }
+                skillUpdates = updates
+                AppLog.trace("plugins", "skill updates \(AppLog.tag(profile)): \(updates.count)")
+                if !silent {
+                    if updates.isEmpty {
+                        flash("All skills are up to date.") { $0.skillsNotice = $1 } read: { $0.skillsNotice }
+                    } else {
+                        HQAnnounce.say("\(Self.plural(updates.count, "skill update", "skill updates")) available.")
+                    }
+                }
+            } catch {
+                guard profile == self.profile else { return }
+                if case let http as HTTPError = error, http.status == 404 || http.status == 405 {
+                    if !silent {
+                        FailureAlert.present(title: "Skill Updates Not Available",
+                                             reason: "This Hermes gateway doesn’t support checking for skill updates yet.",
+                                             from: presenter)
+                    }
+                    return
+                }
+                let reason = CapabilitiesStore.detail(error)
+                AppLog.note("plugins", "skill updates check failed: \(reason)")
+                if !silent {
+                    FailureAlert.present(title: "Couldn’t Check for Updates", reason: reason, detail: "\(error)", from: presenter)
+                }
+            }
+        }
+    }
+
+    /// Runs `POST /api/skills/hub/update` and polls the background action until completion.
+    func updateAllSkills() {
+        guard let service, !readOnly, !updatingSkills else { return }
+        updatingSkills = true
+        let profile = self.profile
+        let start = ContinuousClock.now
+        AppLog.trace("plugins", "skills hub update started for \(AppLog.tag(profile))")
+        Task {
+            defer { if profile == self.profile { updatingSkills = false } }
+            var last: ActionStatus?
+            do {
+                for try await status in service.updateSkills(profile) { last = status }
+            } catch {
+                guard profile == self.profile else { return }
+                let reason = CapabilitiesStore.detail(error)
+                AppLog.note("plugins", "skills hub update failed after \(AppLog.ms(since: start)) ms: \(reason)")
+                FailureAlert.present(title: "Couldn’t Update Skills", reason: reason, detail: "\(error)", from: presenter)
+                return
+            }
+            guard profile == self.profile else { return }
+            if last?.exitCode == 0 {
+                AppLog.trace("plugins", "skills hub update ok in \(AppLog.ms(since: start)) ms")
+                Haptics.play(.success)
+                skillUpdates = []
+                flash("Skills updated for new chats.") { $0.skillsNotice = $1 } read: { $0.skillsNotice }
+                await reloadSkills()
+            } else {
+                let tail = (last?.lines ?? []).suffix(3).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                let reason = tail.isEmpty ? "The skill update didn’t finish." : tail
+                AppLog.note("plugins", "skills hub update failed after \(AppLog.ms(since: start)) ms: \(reason)")
+                FailureAlert.present(title: "Couldn’t Update Skills", reason: reason,
+                                     detail: (last?.lines ?? []).suffix(40).joined(separator: "\n"), from: presenter)
+            }
+        }
     }
 
     /// [capabilities] §3.1: "Get" asks first, then an inline progress row follows the action.

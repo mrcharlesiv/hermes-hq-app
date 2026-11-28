@@ -460,6 +460,7 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
             let before = rooms[index]
             rooms[index].name = incoming.name
             rooms[index].members = incoming.members
+            if let context = incoming.hostedContext { rooms[index].hostedContext = context }
             if var saved = rooms[index].hosted {
                 saved.latest = max(ref.latest, saved.latest)
                 saved.revision = ref.revision

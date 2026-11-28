@@ -188,7 +188,34 @@ nonisolated struct SkillInfo: Identifiable, Sendable, Hashable, Codable {   // C
     /// [capabilities] nil when the gateway sent no number (an older Hermes): "never used" is only a real 0 (spec 3x §3.2).
     var usage: Int?
     var provenance: String?
+    /// Locked against agent edits (`PUT /api/skills/lock`, Hermes 0.23.4+). User edits remain allowed.
+    var locked: Bool = false
+    /// True when the gateway reported the `locked` field (0.23.4+); hides the toggle on older gateways.
+    var supportsLock: Bool = false
     var id: String { name }
+}
+
+nonisolated extension SkillInfo {
+    /// Older warm-cache snapshots lack `locked` / `supportsLock`: default both to false while preserving the memberwise initializer.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        description = try c.decode(String.self, forKey: .description)
+        category = try c.decodeIfPresent(String.self, forKey: .category)
+        enabled = try c.decode(Bool.self, forKey: .enabled)
+        usage = try c.decodeIfPresent(Int.self, forKey: .usage)
+        provenance = try c.decodeIfPresent(String.self, forKey: .provenance)
+        locked = (try? c.decodeIfPresent(Bool.self, forKey: .locked)) ?? false
+        supportsLock = (try? c.decodeIfPresent(Bool.self, forKey: .supportsLock)) ?? false
+    }
+}
+
+/// A hub-installed skill that has an upstream update (`GET /api/skills/hub/updates`, Hermes 0.23.2+).
+nonisolated struct SkillHubUpdate: Identifiable, Sendable, Hashable {
+    var name: String
+    var identifier: String
+    var source: String
+    var id: String { identifier.isEmpty ? name : identifier }
 }
 
 nonisolated struct OfficialSkill: Identifiable, Sendable, Hashable, Codable {
@@ -285,6 +312,17 @@ nonisolated struct McpServer: Identifiable, Sendable, Hashable {
     func mcpServers(_ profile: String) async throws -> [McpServer]
     func mcpStatus(_ profile: String) async throws -> [String: (status: String, tools: Int)]
     func setMcp(_ name: String, enabled: Bool, profile: String) async throws
+    func skillUpdates(_ profile: String) async throws -> [SkillHubUpdate]
+    func setSkillLocked(_ name: String, locked: Bool, profile: String) async throws
+    func updateSkills(_ profile: String) -> AsyncThrowingStream<ActionStatus, Error>
+}
+
+@MainActor extension CapabilitiesService {
+    func skillUpdates(_ profile: String) async throws -> [SkillHubUpdate] { [] }
+    func setSkillLocked(_ name: String, locked: Bool, profile: String) async throws {}
+    func updateSkills(_ profile: String) -> AsyncThrowingStream<ActionStatus, Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
 }
 
 // MARK: - What the settings screens need from the app model

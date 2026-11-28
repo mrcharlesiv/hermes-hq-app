@@ -59,6 +59,19 @@ nonisolated enum PromptKind: String, Sendable, Hashable, CaseIterable {
 
 nonisolated enum ApprovalChoice: String, Sendable, Hashable { case once, session, always, deny }
 
+/// [v0.23.4] `ApprovalKind`: command approvals vs sandbox folder (`access`) and website (`network`) approvals.
+nonisolated enum ApprovalKind: String, Sendable, Hashable, Codable {
+    case command
+    case access
+    case network
+}
+
+/// [v0.23.4] `ApprovalAccessLevel` on `kind == "access"` requests.
+nonisolated enum ApprovalAccessLevel: String, Sendable, Hashable, Codable {
+    case read
+    case readWrite = "read_write"
+}
+
 /// One approval as the card shows it (the oldest of the stack is drawn).
 nonisolated struct ApprovalPrompt: Equatable, Sendable, Identifiable {
     var id: String                 // entry id (srq id, or "queue:<request_id>")
@@ -73,9 +86,19 @@ nonisolated struct ApprovalPrompt: Equatable, Sendable, Identifiable {
     var answering: ApprovalChoice?
     /// Answered: the card fades out (200 ms) before it goes.
     var leaving = false
+    /// [v0.23.4] Sandbox approval fields (`kind`, `path`, `access`, `host`, `label`, `risk`).
+    var kind: ApprovalKind = .command
+    var path: String? = nil
+    var access: ApprovalAccessLevel? = nil
+    var host: String? = nil
+    var label: String? = nil
+    var risk: String? = nil
+
+    var isSandbox: Bool { kind == .access || kind == .network }
 
     /// A plugin rule's synthetic label (`<tool> (…`) or no command at all: the card shows the description (§4.2).
     var showsDescription: Bool {
+        guard kind == .command else { return false }
         let c = command.trimmingCharacters(in: .whitespacesAndNewlines)
         return c.isEmpty || c.range(of: #"^<[^>]+> \("#, options: .regularExpression) != nil
     }
@@ -174,6 +197,10 @@ protocol ChatPrompting: AnyObject {
     /// Called on the main actor whenever `prompts` changed.
     var onPromptsChange: (() -> Void)? { get set }
     func answerApproval(_ id: String, _ choice: ApprovalChoice) async throws
+    /// [v0.23.4] Optional `reason` for denying a sandbox `access` or `network` approval.
+    func answerApproval(_ id: String, _ choice: ApprovalChoice, reason: String?) async throws
+    /// [v0.23.4] Tells the gateway the approval card is on screen (`approval.received`) so its timeout starts.
+    func approvalDisplayed(_ id: String)
     func dismissExpiredApproval(_ id: String)
     /// `approvals.timeout` of the chat's profile in seconds (cached 5 min; 300 when unset). `fresh` reads it again.
     func approvalTimeout(fresh: Bool) async -> TimeInterval
@@ -187,4 +214,11 @@ protocol ChatPrompting: AnyObject {
     func promptsCameOnScreen()
     /// The offline toasts' "Reconnect" (§4.7): dial now.
     func reconnectNow()
+}
+
+extension ChatPrompting {
+    func answerApproval(_ id: String, _ choice: ApprovalChoice, reason: String?) async throws {
+        try await answerApproval(id, choice)
+    }
+    func approvalDisplayed(_ id: String) {}
 }

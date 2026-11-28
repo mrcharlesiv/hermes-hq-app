@@ -436,6 +436,41 @@ nonisolated struct SessionSummary: Identifiable, Hashable, Sendable {
 
 // MARK: - Chat (owner: Data/Chat)
 
+/// [v0.23.5] A display-only card posted by a plugin (`ctx.post_card` / `plugin.card` WS event / `plugin_card` row).
+nonisolated struct PluginCard: Hashable, Sendable, Codable {
+    var pluginId: String
+    var cardId: String
+    var directiveName: String? = nil
+    var directiveAttrs: [String: String] = [:]
+
+    static func parse(_ raw: JSONValue?) -> PluginCard? {
+        guard let obj = raw?.object,
+              let pluginId = obj["plugin_id"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !pluginId.isEmpty,
+              let cardId = obj["card_id"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !cardId.isEmpty else {
+            return nil
+        }
+        var directiveName: String?
+        var directiveAttrs: [String: String] = [:]
+        if let dir = obj["directive"]?.object,
+           let name = dir["name"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            directiveName = name
+            if let attrs = dir["attrs"]?.object {
+                for (k, v) in attrs {
+                    if let s = v.string { directiveAttrs[k] = s }
+                }
+            }
+        }
+        return PluginCard(pluginId: pluginId, cardId: cardId, directiveName: directiveName, directiveAttrs: directiveAttrs)
+    }
+}
+
+/// [v0.23.x] Risk warning attached to a tool call (`tool.output_risk` WS event).
+nonisolated struct ToolOutputRisk: Hashable, Sendable, Codable {
+    var risk: String
+    var findings: [String]
+    var redacted: Bool
+}
+
 /// One tool call inside an assistant turn (spec 03 §6, spec 04 §3.2).
 nonisolated struct ToolCall: Hashable, Sendable {
     enum State: String, Hashable, Sendable { case running, done, failed }
@@ -451,6 +486,8 @@ nonisolated struct ToolCall: Hashable, Sendable {
     /// [transcript] The finished call's size in words ("10 KB output") or its one short line of shell output, shown at
     /// the row's trailing edge (docs/spec/3x-transcript.md §5.1). Not kept in the transcript cache.
     var note: String? = nil
+    /// [v0.23.x] Output risk notice reported by `tool.output_risk` (never cached).
+    var outputRisk: ToolOutputRisk? = nil
 }
 
 nonisolated enum ChatPart: Hashable, Sendable {
@@ -499,6 +536,10 @@ nonisolated struct ChatMessage: Identifiable, Hashable, Sendable {
     /// The stored row a reaction is written to when that differs from `rowId` (a reply folded from several rows reacts on
     /// the row holding its words, as the live turn's `final_assistant_row_id` does).
     var reactionRow: Int? = nil
+    /// [v0.23.5] Plugin card identity & optional directive for live/history deduplication (`plugin.card` / `plugin_card`).
+    var pluginCard: PluginCard? = nil
+    /// [v0.23.x] Non-nil when this row is a safety-refused user turn (`display_kind == "content_refused"`).
+    var contentRefusedNotice: String? = nil
 
     /// The row `message.react` addresses; nil for a message not stored yet.
     var reactionTarget: Int? { reactionRow ?? rowId }

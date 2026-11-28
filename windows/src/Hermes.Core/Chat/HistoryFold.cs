@@ -172,6 +172,47 @@ public static class HistoryFold
             var time = r.UnixTime("timestamp");
             string Id(string k) => rowId is { } id ? $"stored-row-{id}-{k}" : $"history-page-{pageSeq}-{i}-{k}";
 
+            if (kind == "plugin_card")
+            {
+                Flush();
+                var meta = DisplayMeta(r);
+                var nested = meta.Obj("plugin_card");
+                var pluginId = nested.Str("plugin_id") ?? meta.Str("plugin_id") ?? r.Str("plugin_id") ?? "";
+                var cardId = nested.Str("card_id") ?? meta.Str("card_id") ?? r.Str("card_id") ?? "";
+                var displayText = meta.Str("display_text")?.Trim()
+                    ?? nested.Str("display_text")?.Trim()
+                    ?? meta.Str("text")?.Trim()
+                    ?? nested.Str("text")?.Trim()
+                    ?? RowText(r);
+                var card = new PluginCard(pluginId, cardId,
+                    string.IsNullOrWhiteSpace(displayText) ? null : displayText,
+                    nested?.Get("payload")?.DeepClone() ?? meta?.Get("payload")?.DeepClone() ?? r.Get("payload")?.DeepClone());
+                var shownText = string.IsNullOrWhiteSpace(displayText)
+                    ? (pluginId.Length > 0 ? $"Card from {pluginId}" : "Plugin card")
+                    : displayText;
+                output.Add(new ChatMessage(Id("plugin-card"), Role.System, [new TextPart(shownText)], time, rowId)
+                {
+                    PluginCard = card,
+                });
+                continue;
+            }
+            if (kind == "content_refused")
+            {
+                Flush();
+                var text = RowText(r);
+                var meta = DisplayMeta(r);
+                var block = meta.Obj("content_refused");
+                var notice = block.Str("notice")?.Trim()
+                    ?? meta.Str("notice")?.Trim()
+                    ?? meta.Str("reason")?.Trim()
+                    ?? "Message withheld by safety filter";
+                var parts = text.Length > 0 ? new ChatPart[] { new TextPart(text) } : new ChatPart[] { new TextPart(notice) };
+                output.Add(new ChatMessage(Id("refused"), Role.System, parts, time, rowId)
+                {
+                    ContentRefusedNotice = notice,
+                });
+                continue;
+            }
             if (kind == "model_switch" || (kind != null && NoticeKinds.Contains(kind)) || role == "system")
             {
                 Flush();
@@ -318,6 +359,13 @@ public static class HistoryFold
     /// A result kept for the step sheet: at most 64 KB (the sheet shows the head of a big output).
     public static string? Bounded(string? text) =>
         string.IsNullOrEmpty(text) ? null : text.Length > 65_536 ? text[..65_536] : text;
+
+    private static JsonObject? DisplayMeta(JsonObject row)
+    {
+        if (row.Obj("display_metadata") is { } obj) return obj;
+        if (row.Str("display_metadata") is { Length: > 0 } raw && J.Parse(raw) is JsonObject parsed) return parsed;
+        return null;
+    }
 
     /// A short line for a finished tool: stdout's first line, an error, or the text's first line.
     public static string? Summary(string? result)

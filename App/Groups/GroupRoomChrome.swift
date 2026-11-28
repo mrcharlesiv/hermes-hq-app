@@ -23,9 +23,13 @@ import UIKit
     private let dock = UIStackView()
     private let replyChip = RoomReplyChip()
     private let pausedCapsule = RoomPausedCapsule()
+    private let continueCapsule = RoomContinueCapsule()
+    private let hostedApprovalCard = RoomHostedApprovalCard()
     private let mentions = RoomMentionList()
     private var emptyView: RoomEmptyView?
     private var stopping = false
+    private var continuing = false
+    private var approvingId: String?
     var actions = GroupRoomActions() { didSet { refreshEmpty() } }
 
     init(chat: ChatViewController, room: any ChatRoomSurface) {
@@ -44,10 +48,11 @@ import UIKit
         dock.translatesAutoresizingMaskIntoConstraints = false
         dock.accessibilityIdentifier = "room.dock"
         chat.view.insertSubview(dock, belowSubview: jumpButton)
-        for view in [replyChip, pausedCapsule, mentions] as [UIView] {
+        for view in [hostedApprovalCard, continueCapsule, replyChip, pausedCapsule, mentions] as [UIView] {
             view.isHidden = true
             dock.addArrangedSubview(view)
         }
+        hostedApprovalCard.widthAnchor.constraint(equalTo: dock.widthAnchor).isActive = true
         replyChip.widthAnchor.constraint(equalTo: dock.widthAnchor).isActive = true
         mentions.widthAnchor.constraint(equalTo: dock.widthAnchor).isActive = true
         let sides = [dock.leadingAnchor.constraint(equalTo: chat.view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
@@ -65,6 +70,8 @@ import UIKit
             self?.room.resumeAll()
         }
         pausedCapsule.onShow = { [weak self] in self?.showPaused() }
+        continueCapsule.onContinue = { [weak self] in self?.continueDiscussion() }
+        hostedApprovalCard.onDecision = { [weak self] action, choice in self?.answerHostedApproval(action, choice: choice) }
         mentions.onPick = { [weak self] tag in self?.insertMention(tag, replacingQuery: true) }
         // The @ list takes the message field's list keys, as a bot chat's @ and / drawer does (a room has no drawer:
         // `ChatViewController.installDrawer`): ↑ / ↓ mark a row, Tab picks it (or the first), Return picks a marked
@@ -114,6 +121,16 @@ import UIKit
         if !paused.isEmpty, pausedCapsule.set(GroupRowWords.paused(paused), count: paused.count) { changed = true }
         show(pausedCapsule, !paused.isEmpty)
         let running = room.roomRunning
+        let showContinue = room.hostedPausedDiscussion != nil && !running
+        if showContinue, continueCapsule.set(busy: continuing) { changed = true }
+        show(continueCapsule, showContinue)
+        if let approval = room.hostedApprovals.first {
+            let who = room.memberDisplayName(forMemberId: approval.memberId)
+            if hostedApprovalCard.set(action: approval, botName: who, busy: approvingId == approval.id) { changed = true }
+            show(hostedApprovalCard, true)
+        } else {
+            show(hostedApprovalCard, false)
+        }
         if !running { stopping = false }
         if chat.composer.isRunning != running { chat.composer.isRunning = running }   // the composer's Stop square
         // A second failure of the same send says why (the "Couldn’t Deliver" alert).
@@ -222,6 +239,45 @@ import UIKit
         let alert = UIAlertController(title: "Paused Bots", message: room.paused.joined(separator: "\n"), preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Done", style: .cancel))
         chat.present(alert, animated: true)
+    }
+
+    private func continueDiscussion() {
+        guard !continuing else { return }
+        continuing = true
+        Haptics.play(.light)
+        refresh(animated: false)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.room.continueHostedDiscussion()
+            } catch {
+                if let chat = self.chat {
+                    FailureAlert.present(error, fallbackTitle: "Couldn’t Continue Discussion", from: chat)
+                }
+            }
+            self.continuing = false
+            self.refresh(animated: true)
+        }
+    }
+
+    private func answerHostedApproval(_ action: HostedPendingAction, choice: ApprovalChoice) {
+        guard approvingId == nil else { return }
+        approvingId = action.id
+        Haptics.play(.selection)
+        refresh(animated: false)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.room.approveHosted(action, choice: choice)
+                Haptics.play(.success)
+            } catch {
+                if let chat = self.chat {
+                    FailureAlert.present(error, fallbackTitle: "Couldn’t Answer Approval", from: chat)
+                }
+            }
+            self.approvingId = nil
+            self.refresh(animated: true)
+        }
     }
 
     /// Sends of this screen being tried again: a second failure shows the alert.
@@ -556,6 +612,137 @@ final class RoomPausedCapsule: UIView {
     private func setFonts() {
         words.configuration?.attributedTitle = AttributedString(shown, attributes: AttributeContainer([.font: roomButtonFont(.subheadline)]))
         resume.configuration?.attributedTitle = AttributedString("Resume", attributes: AttributeContainer([.font: roomButtonFont(.subheadline, bold: true)]))
+    }
+}
+
+/// Hosted discussion reached its round cap (`room.activity` `status == "bounded"`): offers Continue (`groups.continue`).
+final class RoomContinueCapsule: UIView {
+    var onContinue: (() -> Void)?
+    private let glass = roomGlass(radius: nil)
+    private let label = roomLabel(.subheadline, color: ChatPalette.label)
+    private let button = UIButton(type: .system)
+    private var busy = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        addSubview(glass)
+        label.text = "Round limit reached"
+        var config = UIButton.Configuration.plain()
+        config.baseForegroundColor = ChatPalette.tintText
+        config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 16)
+        button.configuration = config
+        button.accessibilityIdentifier = "room.continue"
+        button.addAction(UIAction { [weak self] _ in self?.onContinue?() }, for: .touchUpInside)
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        setFonts()
+        let row = UIStackView(arrangedSubviews: [label, button])
+        row.axis = .horizontal
+        row.alignment = .center
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        glass.contentView.addSubview(row)
+        NSLayoutConstraint.activate([
+            glass.topAnchor.constraint(equalTo: topAnchor), glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+            glass.leadingAnchor.constraint(equalTo: leadingAnchor), glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.topAnchor.constraint(equalTo: glass.contentView.topAnchor), row.bottomAnchor.constraint(equalTo: glass.contentView.bottomAnchor),
+            row.leadingAnchor.constraint(equalTo: glass.contentView.leadingAnchor, constant: 16),
+            row.trailingAnchor.constraint(equalTo: glass.contentView.trailingAnchor),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    func set(busy: Bool) -> Bool {
+        guard busy != self.busy else { return false }
+        self.busy = busy
+        button.isEnabled = !busy
+        setFonts()
+        return true
+    }
+
+    private func setFonts() {
+        button.configuration?.attributedTitle = AttributedString(
+            busy ? "Continuing…" : "Continue",
+            attributes: AttributeContainer([.font: roomButtonFont(.subheadline, bold: true)])
+        )
+    }
+}
+
+/// Inline approval card for a hosted group member (`groups.approve`, Hermes 0.23.2+).
+final class RoomHostedApprovalCard: UIView {
+    var onDecision: ((HostedPendingAction, ApprovalChoice) -> Void)?
+    private let glass = roomGlass(radius: 18)
+    private let titleLabel = roomLabel(.subheadline, weight: .semibold, color: ChatPalette.label, lines: 2)
+    private let detailLabel = roomLabel(.footnote, color: ChatPalette.label2, lines: 4)
+    private let allowButton = UIButton(type: .system)
+    private let denyButton = UIButton(type: .system)
+    private var currentAction: HostedPendingAction?
+    private var lastKey = ""
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        addSubview(glass)
+        var allowCfg = UIButton.Configuration.filled()
+        allowCfg.title = "Allow Once"
+        allowCfg.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
+        allowButton.configuration = allowCfg
+        allowButton.accessibilityIdentifier = "room.approval.allow"
+        allowButton.addAction(UIAction { [weak self] _ in
+            guard let self, let action = self.currentAction else { return }
+            self.onDecision?(action, .once)
+        }, for: .touchUpInside)
+
+        var denyCfg = UIButton.Configuration.bordered()
+        denyCfg.title = "Deny"
+        denyCfg.baseForegroundColor = ChatPalette.red
+        denyCfg.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
+        denyButton.configuration = denyCfg
+        denyButton.accessibilityIdentifier = "room.approval.deny"
+        denyButton.addAction(UIAction { [weak self] _ in
+            guard let self, let action = self.currentAction else { return }
+            self.onDecision?(action, .deny)
+        }, for: .touchUpInside)
+
+        let buttons = UIStackView(arrangedSubviews: [allowButton, denyButton, UIView()])
+        buttons.axis = .horizontal
+        buttons.spacing = 8
+        let stack = UIStackView(arrangedSubviews: [titleLabel, detailLabel, buttons])
+        stack.axis = .vertical
+        stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        glass.contentView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            glass.topAnchor.constraint(equalTo: topAnchor), glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+            glass.leadingAnchor.constraint(equalTo: leadingAnchor), glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: glass.contentView.topAnchor, constant: 12),
+            stack.bottomAnchor.constraint(equalTo: glass.contentView.bottomAnchor, constant: -12),
+            stack.leadingAnchor.constraint(equalTo: glass.contentView.leadingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(equalTo: glass.contentView.trailingAnchor, constant: -14),
+        ])
+        accessibilityIdentifier = "room.approval.card"
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    func set(action: HostedPendingAction, botName: String, busy: Bool) -> Bool {
+        let key = "\(action.id)|\(botName)|\(busy)|\(action.command ?? "")|\(action.description ?? "")"
+        guard key != lastKey else { return false }
+        lastKey = key
+        currentAction = action
+        titleLabel.text = "\(botName) needs approval"
+        let preview = [action.command, action.description]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        detailLabel.text = preview.isEmpty ? "Open \(botName)’s chat or deny to cancel." : preview
+        let choices = action.choices.isEmpty ? ["once", "deny"] : action.choices
+        allowButton.isHidden = !(action.isReviewableApproval && choices.contains("once"))
+        denyButton.isHidden = !choices.contains("deny")
+        allowButton.isEnabled = !busy
+        denyButton.isEnabled = !busy
+        return true
     }
 }
 

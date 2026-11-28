@@ -98,6 +98,12 @@ nonisolated enum HostedRoomLog {
         var activity: [Activity] = []
         var renamed: String?
         var disbanded = false
+        /// Set when a `room.activity` event paused the discussion at its cap (`status == "bounded"`).
+        var boundedPause: HostedRoomPause?
+        /// True when a later log event supersedes any prior bounded pause (new send, continue, stop, or settle).
+        var clearsBoundedPause = false
+        /// Updated room context carried in a `room.context_set` event.
+        var updatedContext: HostedRoomContext?
 
         struct Activity: Equatable, Sendable {
             var kind: GroupActivityEvent.Kind
@@ -126,6 +132,8 @@ nonisolated enum HostedRoomLog {
             let id = event["event_id"]?.string
             switch kind {
             case "message.user":
+                out.boundedPause = nil
+                out.clearsBoundedPause = true
                 var text = (payload?["text"]?.string ?? payload?["content"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 let files = payload?["attachments"]?.array?.count ?? 0
                 if files > 0 { text += (text.isEmpty ? "" : "\n\n") + (files == 1 ? "(1 attachment)" : "(\(files) attachments)") }
@@ -151,11 +159,25 @@ nonisolated enum HostedRoomLog {
                 let key = member(payload?["member_id"]?.string, profile: nil).map(GroupKeys.memberKey) ?? ""
                 out.activity.append(.init(kind: .cancelled, member: key, detail: nil, thread: thread))
             case "room.stop_requested":
+                out.boundedPause = nil
+                out.clearsBoundedPause = true
                 out.activity.append(.init(kind: .stopped, member: "", detail: nil, thread: thread))
+            case "room.continued", "discussion.continued":
+                out.boundedPause = nil
+                out.clearsBoundedPause = true
+            case "room.context_set", "room.context", "room.context_updated":
+                if let context = HostedRoomContext(json: payload) { out.updatedContext = context }
             case "room.activity":
                 if payload?["status"]?.string == "bounded" {
+                    let discussionId = payload?["discussion_event_id"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if !discussionId.isEmpty {
+                        out.boundedPause = HostedRoomPause(discussionEventId: discussionId, threadId: thread)
+                        out.clearsBoundedPause = false
+                    }
                     out.activity.append(.init(kind: .capped, member: "", detail: nil, thread: thread))
                 } else if payload?["status"]?.string == "settled" {
+                    out.boundedPause = nil
+                    out.clearsBoundedPause = true
                     out.activity.append(.init(kind: .settled, member: "", detail: nil, thread: thread))
                 }
             case "room.renamed":
@@ -214,19 +236,64 @@ nonisolated enum HostedRoomLog {
     private var shown: Set<String> = []
     private var sending: Set<String> = []
     private(set) var retrying: Set<String> = []
+    private var eventsTask: Task<Void, Never>?
+    private var seenBroadcasts: [String] = []
     private var closed = false
 
     init(store: GroupStore, client: any GatewayClient) {
         self.store = store
         self.client = client
+        startChangeEvents()
     }
 
     func shutdown() {
         closed = true
+        eventsTask?.cancel()
+        eventsTask = nil
         listing?.cancel()
         for task in pulls.values { task.cancel() }
         for task in watchers.values { task.cancel() }
-        listing = nil; pulls = [:]; watchers = [:]; shown = []
+        listing = nil; pulls = [:]; watchers = [:]; shown = []; seenBroadcasts = []
+    }
+
+    /// Subscribes to `groups.changed` WebSocket broadcasts (Hermes 0.23.4+), deduping by `broadcast_id`.
+    private func startChangeEvents() {
+        guard !closed, eventsTask == nil else { return }
+        let stream: AsyncStream<GatewayEvent> = (client as? LiveGatewayClient)?.events(matching: ["groups.changed"]) ?? client.events()
+        eventsTask = Task { [weak self] in
+            for await event in stream {
+                guard let self, !self.closed else { return }
+                guard event.type == "groups.changed" else { continue }
+                self.handleGroupsChanged(event.payload)
+            }
+        }
+    }
+
+    func handleGroupsChanged(_ payload: JSONValue) {
+        guard !closed else { return }
+        if let bid = payload["broadcast_id"]?.string, !bid.isEmpty {
+            if seenBroadcasts.contains(bid) { return }
+            seenBroadcasts.append(bid)
+            if seenBroadcasts.count > 128 { seenBroadcasts.removeFirst(seenBroadcasts.count - 128) }
+        }
+        if let roomIds = payload["room_ids"]?.array?.compactMap(\.string), !roomIds.isEmpty {
+            let wanted = Set(roomIds)
+            for room in store.rooms where room.isHosted {
+                guard let roomId = room.hosted?.roomId, wanted.contains(roomId) else { continue }
+                let key = room.key
+                pull(key)
+                if shown.contains(key) || room.running {
+                    Task { [weak self] in _ = await self?.readState(key) }
+                }
+            }
+            // Ignore broadcasts naming only rooms this device does not hold (avoids hammering `groups.list`).
+        } else {
+            for key in shown {
+                pull(key)
+                Task { [weak self] in _ = await self?.readState(key) }
+            }
+            refresh(force: false)
+        }
     }
 
     /// A new socket: a gateway that said "no such method" may have been updated since.
@@ -391,6 +458,12 @@ nonisolated enum HostedRoomLog {
                 let before = Set(room.log.compactMap(\.id))
                 room.log = HostedRoomLog.merge(room.log, adding: applied.entries)
                 if let name = applied.renamed { room.name = name }
+                if let context = applied.updatedContext { room.hostedContext = context }
+                if let pause = applied.boundedPause {
+                    room.pausedDiscussion = pause
+                } else if applied.clearsBoundedPause {
+                    room.pausedDiscussion = nil
+                }
                 if var ref = room.hosted {
                     ref.cursor = max(cursor, ref.cursor)
                     ref.latest = max(result["latest_seq"]?.int ?? cursor, ref.latest)
@@ -420,18 +493,49 @@ nonisolated enum HostedRoomLog {
         let working = driver?["working"]?.bool == true || !activity.isEmpty
         let busy = activity.first { ["running", "queued", "waiting"].contains($0["status"]?.string ?? "running") } ?? activity.first
         let member = busy?["member_id"]?.string.flatMap { id in room.members.first { HostedRoomLog.memberId($0) == id } }
-        let waiting = !(driver?["pending_actions"]?.array ?? []).isEmpty
+        let pendingActions = (driver?["pending_actions"]?.array ?? []).compactMap(HostedPendingAction.init(json:))
+        let waiting = !pendingActions.isEmpty
+        let routingModes = driver?["routing_modes"]?.array?.compactMap(\.string)
+        let maxContinues = driver?["max_continues"]?.int
+        let changeEvents = result["change_events"]?.bool == true
+        let parsedContext = HostedRoomContext(json: result["context"])
+        let statePause: HostedRoomPause? = {
+            if let raw = driver?["paused_discussion"],
+               let discId = raw["discussion_event_id"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !discId.isEmpty {
+                return HostedRoomPause(discussionEventId: discId, threadId: raw["thread_id"]?.string)
+            }
+            if let discId = driver?["bounded_discussion_event_id"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !discId.isEmpty {
+                return HostedRoomPause(discussionEventId: discId, threadId: driver?["bounded_thread_id"]?.string)
+            }
+            return nil
+        }()
         store.setRuntime(key) { room in
             room.running = working
             room.turn = working ? member.map { GroupTurnState(name: GroupKeys.memberKey($0), thread: busy?["thread_id"]?.string ?? "",
                                                               waitingOnUser: waiting) } : nil
+            room.pendingActions = pendingActions
+            room.routingModes = routingModes
+            room.maxContinues = maxContinues
+            room.supportsChangeEvents = changeEvents
+            if working {
+                room.pausedDiscussion = nil
+            } else if let statePause {
+                room.pausedDiscussion = statePause
+            }
         }
         if let latest = result["room"]?["latest_seq"]?.int, latest > (store.room(key)?.hosted?.cursor ?? 0) { await readLog(key) }
-        if let fresh = HostedRoomLog.room(result["room"], owner: ref.owner) { store.upsertHosted(fresh) }
+        if var fresh = HostedRoomLog.room(result["room"], owner: ref.owner) {
+            fresh.hostedContext = parsedContext
+            store.upsertHosted(fresh)
+        } else if let parsedContext {
+            store.update(key, sync: false) { $0.hostedContext = parsedContext }
+        }
         return working
     }
 
-    /// The room came on screen or left it: an open room is read every `pollEvery` seconds.
+    /// The room came on screen or left it: an open room is read every `pollEvery` seconds (or backstop when `groups.changed` is active).
     func roomShown(_ key: String, _ on: Bool) {
         if on { shown.insert(key); watch(key) } else { shown.remove(key) }
     }
@@ -446,7 +550,9 @@ nonisolated enum HostedRoomLog {
                 await self.readLog(key)
                 quiet = working || self.shown.contains(key) ? 0 : quiet + 1
                 if quiet >= 2 || self.store.room(key) == nil { break }
-                try? await Task.sleep(nanoseconds: UInt64(self.pollEvery * 1_000_000_000))
+                let supportsPush = self.store.room(key)?.supportsChangeEvents == true
+                let interval = supportsPush ? max(self.pollEvery, 15) : self.pollEvery
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
             }
             self?.watchers[key] = nil
         }
@@ -553,6 +659,109 @@ nonisolated enum HostedRoomLog {
         }
         watchers.removeValue(forKey: key)?.cancel()
         store.removeHosted(key)
+    }
+
+    // MARK: Approvals, Continue Discussion, Context, Per-Profile Approval Mode (v0.23.2–v0.23.5)
+
+    /// Answers a member's pending approval inside a hosted group chat (`groups.approve`).
+    func approve(_ key: String, action: HostedPendingAction, choice: ApprovalChoice) async throws {
+        guard let room = store.room(key), let ref = room.hosted else { return }
+        guard action.isApproval, action.executionGeneration >= 1,
+              let requestId = action.requestId, !requestId.isEmpty else {
+            throw BotWriteError(title: "Couldn’t Answer Approval", reason: "This group chat approval is no longer available.")
+        }
+        guard choice == .once || choice == .deny else {
+            throw BotWriteError(title: "Couldn’t Answer Approval", reason: "Group approvals only support Allow Once or Deny.")
+        }
+        if !action.choices.isEmpty, !action.choices.contains(choice.rawValue) {
+            throw BotWriteError(title: "Couldn’t Answer Approval", reason: "That choice is not offered for this approval.")
+        }
+        if choice == .once, !action.isReviewableApproval {
+            throw BotWriteError(title: "Couldn’t Answer Approval", reason: "Allow once requires a reviewable command or description.")
+        }
+        let params: JSONValue = [
+            "profile": .string(ref.owner),
+            "room_id": .string(ref.roomId),
+            "member_id": .string(action.memberId),
+            "task_id": .string(action.taskId),
+            "execution_generation": .number(Double(action.executionGeneration)),
+            "choice": .string(choice.rawValue),
+            "request_id": .string(requestId),
+        ]
+        do {
+            _ = try await client.call("groups.approve", params, timeout: .seconds(20))
+            _ = await readState(key)
+            pull(key)
+        } catch let error as RPCError {
+            throw BotWriteError(title: "Couldn’t Answer Approval", reason: Self.words(error))
+        }
+    }
+
+    /// Resumes a hosted group discussion paused at its round limit (`groups.continue`).
+    func continueDiscussion(_ key: String, discussionEventId: String) async throws {
+        guard let room = store.room(key), let ref = room.hosted, !discussionEventId.isEmpty else { return }
+        do {
+            _ = try await client.call("groups.continue", [
+                "profile": .string(ref.owner),
+                "room_id": .string(ref.roomId),
+                "discussion_event_id": .string(discussionEventId),
+            ], timeout: .seconds(20))
+            store.setRuntime(key) {
+                $0.pausedDiscussion = nil
+                $0.running = true
+            }
+            watch(key)
+        } catch let error as RPCError {
+            throw BotWriteError(title: "Couldn’t Continue Discussion", reason: Self.words(error))
+        }
+    }
+
+    /// Saves a hosted room's purpose, shared notes (max 4,096 UTF-8 bytes), and routing (`groups.context`).
+    func setContext(_ key: String, purpose: String, notes: String, routing: String? = nil, leadMemberId: String? = nil) async throws {
+        guard let room = store.room(key), let ref = room.hosted else { return }
+        guard HostedRoomContext.notesUTF8Count(notes) <= HostedRoomContext.maxNotesBytes else {
+            throw BotWriteError(title: "Notes Too Long", reason: "Shared notes can be at most \(HostedRoomContext.maxNotesBytes) bytes.")
+        }
+        let normalizedPurpose = HostedRoomContext.normalizePurpose(purpose)
+        var params: [String: JSONValue] = [
+            "profile": .string(ref.owner),
+            "room_id": .string(ref.roomId),
+            "event_id": .string(Self.cancelId()),
+            "purpose": .string(normalizedPurpose),
+            "notes": .string(notes),
+        ]
+        if let routing, !routing.isEmpty { params["routing"] = .string(routing) }
+        if let leadMemberId { params["lead_member_id"] = .string(leadMemberId) }
+        do {
+            let result = try await client.call("groups.context", .object(params), timeout: .seconds(20))
+            let saved = HostedRoomContext(json: result["context"])
+                ?? HostedRoomContext(purpose: normalizedPurpose, notes: notes, routing: routing ?? "everyone", leadMemberId: leadMemberId ?? "")
+            store.update(key, sync: false) { $0.hostedContext = saved }
+        } catch let error as RPCError {
+            throw BotWriteError(title: "Couldn’t Save Context", reason: Self.words(error))
+        }
+    }
+
+    /// Reads one member profile's `approvals.mode` (`config.get`, scoped to `profile` per Hermes 0.23.5 #125969).
+    func approvalMode(forProfile profile: String) async throws -> String {
+        let trimmed = profile.trimmingCharacters(in: .whitespacesAndNewlines)
+        var params: [String: JSONValue] = ["key": .string("approvals.mode")]
+        if !trimmed.isEmpty { params["profile"] = .string(trimmed) }
+        let result = try await client.call("config.get", .object(params), timeout: .seconds(15))
+        let mode = result["value"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return ["manual", "smart", "off"].contains(mode) ? mode : "manual"
+    }
+
+    /// Sets one member profile's `approvals.mode` (`config.set`, scoped to `profile` per Hermes 0.23.5 #125969).
+    @discardableResult
+    func setApprovalMode(_ mode: String, forProfile profile: String) async throws -> String {
+        let normalized = mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmed = profile.trimmingCharacters(in: .whitespacesAndNewlines)
+        var params: [String: JSONValue] = ["key": .string("approvals.mode"), "value": .string(normalized)]
+        if !trimmed.isEmpty { params["profile"] = .string(trimmed) }
+        let result = try await client.call("config.set", .object(params), timeout: .seconds(15))
+        let kept = result["value"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? normalized
+        return ["manual", "smart", "off"].contains(kept) ? kept : normalized
     }
 
     /// A refusal in plain words: the gateway's own sentence when it has one, else what the code means.

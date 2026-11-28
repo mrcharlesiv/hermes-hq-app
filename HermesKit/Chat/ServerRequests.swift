@@ -107,6 +107,8 @@ import Synchronization
     private var knownIds: Set<String> = []
     private var drafts: [String: ClarifyDraft] = [:]
     private var approvalSeen: [(key: String, at: Date)] = []
+    /// [v0.23.4] `(sessionId:requestId)` keys for which `approval.received` has been sent so its timeout clock starts.
+    private var approvalReceivedSent: Set<String> = []
     private var stackSize: [String: Int] = [:]
     private var sent: [String: SentClarify] = [:]
     private var undelivered: Set<String> = []
@@ -209,6 +211,7 @@ import Synchronization
         sent = [:]
         undelivered = []
         recentlyAnswered = []
+        approvalReceivedSent = []
         prunedLogins = []
         sentLogins = [:]
         for session in sessions { changed(session) }
@@ -367,14 +370,30 @@ import Synchronization
         drafts[requestId] = draft
     }
 
+    private static func approvalKind(of params: JSONValue) -> ApprovalKind {
+        guard let raw = params["kind"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let kind = ApprovalKind(rawValue: raw) else { return .command }
+        return kind
+    }
+
     private func approvalPrompt(_ entry: Entry) -> ApprovalPrompt {
         let p = entry.params
+        let kind = Self.approvalKind(of: p)
         let choices = p["choices"]?.array?.compactMap(\.string) ?? (p["smart_denied"]?.bool == true ? ["once", "deny"] : nil)
-        let allowSession = choices?.contains("session") ?? true
+        // [v0.23.4] Sandbox folder/website approvals never offer "Allow for This Chat" (`session`), even if `choices` lists it.
+        let allowSession = kind == .command ? (choices?.contains("session") ?? (p["allow_session"]?.bool != false)) : false
         let allowAlways = choices?.contains("always") ?? (p["allow_permanent"]?.bool != false)
+        let path = p["path"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let access = p["access"]?.string.flatMap(ApprovalAccessLevel.init(rawValue:))
+        let host = p["host"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = p["label"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let risk = p["risk"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
         return ApprovalPrompt(id: entry.id, command: p["command"]?.string ?? "", description: p["description"]?.string ?? "",
                               allowSession: allowSession, allowAlways: allowAlways, clockKey: clockKey(entry),
-                              firstSeen: entry.firstSeen, answering: entry.answering, leaving: entry.state == .leaving)
+                              firstSeen: entry.firstSeen, answering: entry.answering, leaving: entry.state == .leaving,
+                              kind: kind, path: path?.isEmpty == false ? path : nil, access: access,
+                              host: host?.isEmpty == false ? host : nil, label: label?.isEmpty == false ? label : nil,
+                              risk: risk?.isEmpty == false ? risk : nil)
     }
 
     private func clockKey(_ entry: Entry) -> String {
@@ -500,7 +519,23 @@ import Synchronization
             sendResult(id, .object([:]))
             return
         }
+        // [v0.23.4] Upstream contract: an `access` request without `path` or a `network` request without `host` is
+        // refused with an error and shows no card.
+        if kind == .approval {
+            let approvalKind = Self.approvalKind(of: params)
+            if approvalKind == .access, (params["path"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty {
+                sendError(id, code: -32602, message: "access approval requires path")
+                return
+            }
+            if approvalKind == .network, (params["host"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty {
+                sendError(id, code: -32602, message: "network approval requires host")
+                return
+            }
+        }
         let queueRequest = kind == .approval ? params["request_id"]?.string.flatMap { $0.isEmpty ? nil : $0 } : nil
+        if kind == .approval, replayed, let queueRequest {
+            approvalReceivedSent.remove("\(session):\(queueRequest)")
+        }
         AppLog.trace("chat", "server request \(kind.rawValue) \(AppLog.tag(id)) for \(AppLog.tag(session)): \(entries.contains(where: { $0.id == id }) ? "again, params refreshed" : "shown"), replayed=\(replayed), epoch \(epoch)")
         if let i = entries.firstIndex(where: { $0.id == id }) {
             // Same request again: keep its UI state, take the new params (a replay may add clarify `answers`).
@@ -754,11 +789,18 @@ import Synchronization
     // model switch). A finished turn has no open srq unless its `request.cancel` was missed: one round trip.
     private func turnEnded(_ session: String) {
         liveTurns.remove(session)
-        let queueOnly = entries.filter { $0.sessionId == session && $0.kind == .approval && !$0.srqOpen && $0.state == .open }
+        // [v0.23.4] Sandbox folder (`access`) and site (`network`) cards outlive their turn and stay until withdrawn
+        // or absent from `approval.pending`; only command queue-only cards clear on turn end.
+        let queueOnly = entries.filter {
+            $0.sessionId == session && $0.kind == .approval && !$0.srqOpen && $0.state == .open
+                && Self.approvalKind(of: $0.params) == .command
+        }
         if !queueOnly.isEmpty {
             entries.removeAll { e in queueOnly.contains { $0.id == e.id } }
             bumpApprovals(session)
             changed(session)
+            replayApprovals(session)
+        } else if entries.contains(where: { $0.sessionId == session && $0.kind == .approval && !$0.srqOpen }) {
             replayApprovals(session)
         }
         if entries.contains(where: { $0.sessionId == session && $0.srqOpen }) { probeSoon(session) }
@@ -992,17 +1034,40 @@ import Synchronization
     static let offline = "Hermes is offline right now. Reconnect, then send it again."
     static let clarifyFailed = "Couldn’t send your answers."
 
-    func answerApproval(_ id: String, _ choice: ApprovalChoice) async throws {
+    /// [v0.23.4] Tells the gateway the approval card is visible on screen (`approval.received`) so it confirms the request is still pending.
+    func markApprovalDisplayed(_ id: String) {
+        guard !shutDown, let entry = entries.first(where: { $0.id == id && $0.kind == .approval && $0.state == .open }) else { return }
+        guard let requestId = entry.queueRequestId, !requestId.isEmpty, !entry.sessionId.isEmpty else { return }
+        let key = "\(entry.sessionId):\(requestId)"
+        guard approvalReceivedSent.insert(key).inserted else { return }
+        if approvalReceivedSent.count > 256 { approvalReceivedSent.removeAll(); approvalReceivedSent.insert(key) }
+        var params: [String: JSONValue] = [
+            "session_id": .string(entry.sessionId),
+            "request_id": .string(requestId),
+        ]
+        if let profile = runtimes[entry.sessionId]?.profileParam { params["profile"] = .string(profile) }
+        let client = self.client
+        Task { _ = try? await client.call("approval.received", .object(params), timeout: .seconds(10)) }
+    }
+
+    func answerApproval(_ id: String, _ choice: ApprovalChoice, reason: String? = nil) async throws {
         guard let i = entries.firstIndex(where: { $0.id == id }), entries[i].kind == .approval, entries[i].state == .open else { return }
+        (client as? ClientActivityReporting)?.noteActivityInput()
         let entry = entries[i]
+        let isSandbox = Self.approvalKind(of: entry.params) != .command
+        let trimmedReason = reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let denyReason: String? = (choice == .deny && isSandbox && trimmedReason?.isEmpty == false)
+            ? trimmedReason.map { String($0.prefix(500)) } : nil
         entries[i].state = .answering
         entries[i].answering = choice
         changed(entry.sessionId)
         do {
             if entry.srqOpen {
-                try await respondOnce(id, ["choice": .string(choice.rawValue)], offline: Self.approvalOffline, failed: Self.approvalFailed)
+                var payload: [String: JSONValue] = ["choice": .string(choice.rawValue)]
+                if let denyReason { payload["reason"] = .string(denyReason) }
+                try await respondOnce(id, .object(payload), offline: Self.approvalOffline, failed: Self.approvalFailed)
             } else {
-                try await approvalRespond(entry, choice)
+                try await approvalRespond(entry, choice, reason: denyReason)
             }
         } catch {
             AppLog.note("chat", "approval \(AppLog.tag(id)) \(choice.rawValue) not sent (\((error as? PromptAnswerError)?.offline == true ? "offline" : "failed")); card open again")
@@ -1041,12 +1106,13 @@ import Synchronization
     }
 
     /// A queue-backed approval with no srq: `approval.respond` (330 s, retried once on a timeout only).
-    private func approvalRespond(_ entry: Entry, _ choice: ApprovalChoice) async throws {
+    private func approvalRespond(_ entry: Entry, _ choice: ApprovalChoice, reason: String? = nil) async throws {
         guard connection == .ready else { throw PromptAnswerError(message: Self.approvalOffline, offline: true) }
         var params: [String: JSONValue] = ["session_id": .string(entry.sessionId), "choice": .string(choice.rawValue),
                                            "all": false]
         if let request = entry.queueRequestId { params["request_id"] = .string(request) }
         if let profile = runtimes[entry.sessionId]?.profileParam { params["profile"] = .string(profile) }
+        if let reason, !reason.isEmpty { params["reason"] = .string(reason) }
         noteAnswered(entry.id)
         var attempt = 0
         while true {
@@ -1381,13 +1447,19 @@ import Synchronization
     var onLoginSavedLate: ((String) -> Void)?
     /// The chat screen's own listener (`ChatPrompting.onPromptsChange`).
     var screenOnChange: (() -> Void)?
+    /// Per-chat token registered with `GatewayConnection`'s `client.activity` aggregator.
+    let activityToken = UUID()
+    var onDetachActivity: ((UUID) -> Void)?
 
     init(center: ServerRequestCenter) {
         self.center = center
         center.register(self)
     }
 
-    isolated deinit { center?.unregister(self) }
+    isolated deinit {
+        onDetachActivity?(activityToken)
+        center?.unregister(self)
+    }
 
     func covers(_ session: String) -> Bool { sessionIds.contains(session) }
 

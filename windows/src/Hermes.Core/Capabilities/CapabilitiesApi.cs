@@ -123,6 +123,33 @@ public sealed class CapabilitiesApi(GatewaySession session, RpcConnection rpc)
         return Serial(profile, () => Rest(HttpMethod.Put, "/api/skills/toggle", profile, body: new JsonObject { ["name"] = name, ["enabled"] = enabled }));
     }
 
+    /// Lock/unlock a skill against agent edits (`PUT /api/skills/lock`, Hermes 0.23.4+).
+    public Task SetSkillLockedAsync(string name, bool locked, string profile)
+    {
+        Refuse($"Couldn’t Change {name}");
+        return Serial(profile, () => Rest(HttpMethod.Put, "/api/skills/lock", profile, body: new JsonObject { ["name"] = name, ["locked"] = locked }));
+    }
+
+    /// Hub-installed skills with an upstream update (`GET /api/skills/hub/updates`, 120 s timeout).
+    public async Task<List<SkillHubUpdate>> SkillUpdatesAsync(string profile, CancellationToken ct = default)
+    {
+        var v = await Rest(HttpMethod.Get, "/api/skills/hub/updates", profile, timeout: TimeSpan.FromSeconds(120), ct: ct);
+        var seen = new HashSet<string>();
+        var list = new List<SkillHubUpdate>();
+        foreach (var r in v.Arr("updates") ?? [])
+        {
+            if (r.Text("name") is not { } n) continue;
+            var id = r.Text("identifier") ?? n;
+            if (!seen.Add(id)) continue;
+            list.Add(new SkillHubUpdate(n, id, r.Text("source") ?? ""));
+        }
+        return list;
+    }
+
+    /// `POST /api/skills/hub/update` then polls `/api/actions/{name}/status` until it finishes.
+    public IAsyncEnumerable<ActionStatus> UpdateSkillsAsync(string profile, CancellationToken ct = default) =>
+        Action(profile, "/api/skills/hub/update", new JsonObject(), 200, null, ct);
+
     /// `POST /api/skills/hub/install {identifier}` then the action's status every 1.2 s until it ends.
     public IAsyncEnumerable<ActionStatus> InstallAsync(string identifier, string profile, CancellationToken ct = default) =>
         Action(profile, "/api/skills/hub/install", new JsonObject { ["identifier"] = identifier }, 200, null, ct);

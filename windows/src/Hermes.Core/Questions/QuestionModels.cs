@@ -50,6 +50,12 @@ public static class PromptKinds
 
 public enum ApprovalChoice { Once, Session, Always, Deny }
 
+/// Approval card kind (Hermes 0.23.4+): shell command vs sandbox folder (`access`) or website (`network`).
+public enum ApprovalKind { Command, Access, Network }
+
+/// Folder access permission level for `ApprovalKind.Access`.
+public enum ApprovalAccessLevel { Read, ReadWrite }
+
 public static class ApprovalChoices
 {
     public static string Wire(this ApprovalChoice c) => c switch
@@ -65,11 +71,21 @@ public static class ApprovalChoices
 public sealed record ApprovalPrompt(string Id, string Command, string Description, bool AllowSession, bool AllowAlways,
     string ClockKey, DateTimeOffset FirstSeen, ApprovalChoice? Answering, bool Leaving)
 {
+    public ApprovalKind Kind { get; init; } = ApprovalKind.Command;
+    public string? Path { get; init; }
+    public ApprovalAccessLevel? AccessLevel { get; init; }
+    public string? Host { get; init; }
+    public string? Label { get; init; }
+    public string? Risk { get; init; }
+    public bool IsSandbox => Kind is ApprovalKind.Access or ApprovalKind.Network;
+
     /// A plugin rule's synthetic label (`<tool> (…`) or no command at all: the card shows the description (§4.2).
+    /// Sandbox access/network cards show their own structured target fields, not the raw command description (matching Swift).
     public bool ShowsDescription
     {
         get
         {
+            if (Kind != ApprovalKind.Command) return false;
             var c = Command.Trim();
             return c.Length == 0 || System.Text.RegularExpressions.Regex.IsMatch(c, @"^<[^>]+> \(");
         }

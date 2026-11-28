@@ -60,6 +60,21 @@ nonisolated struct RoomTyping: Hashable, Sendable {
     func mentionTag(for messageId: String) -> String?
     func entry(for messageId: String) -> GroupMessage?
     func replyHeader(_ entry: GroupMessage) -> String
+    /// [hosted] Pending member approvals reported by `groups.state` (`groups.approve`, Hermes 0.23.2+).
+    var hostedApprovals: [HostedPendingAction] { get }
+    /// [hosted] Discussion paused at its round cap (`groups.continue`, Hermes 0.23.3+).
+    var hostedPausedDiscussion: HostedRoomPause? { get }
+    func memberDisplayName(forMemberId memberId: String) -> String
+    func approveHosted(_ action: HostedPendingAction, choice: ApprovalChoice) async throws
+    func continueHostedDiscussion() async throws
+}
+
+@MainActor extension ChatRoomSurface {
+    var hostedApprovals: [HostedPendingAction] { [] }
+    var hostedPausedDiscussion: HostedRoomPause? { nil }
+    func memberDisplayName(forMemberId memberId: String) -> String { memberId }
+    func approveHosted(_ action: HostedPendingAction, choice: ApprovalChoice) async throws {}
+    func continueHostedDiscussion() async throws {}
 }
 
 nonisolated enum RoomSendRefusal: Equatable, Sendable {

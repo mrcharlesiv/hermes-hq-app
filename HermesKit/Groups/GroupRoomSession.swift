@@ -204,6 +204,31 @@ import Foundation
         return "Replying in thread · \(who)"
     }
 
+    var hostedApprovals: [HostedPendingAction] {
+        (room?.pendingActions ?? []).filter(\.isApproval)
+    }
+
+    var hostedPausedDiscussion: HostedRoomPause? {
+        room?.pausedDiscussion
+    }
+
+    func memberDisplayName(forMemberId memberId: String) -> String {
+        if let seat = seats.first(where: { HostedRoomLog.memberId($0.descriptor) == memberId || $0.name == memberId }) {
+            return seat.display
+        }
+        return store.labels(seats)[memberId] ?? memberId
+    }
+
+    func approveHosted(_ action: HostedPendingAction, choice: ApprovalChoice) async throws {
+        guard let hosted = store.hostedRooms else { return }
+        try await hosted.approve(roomKey, action: action, choice: choice)
+    }
+
+    func continueHostedDiscussion() async throws {
+        guard let hosted = store.hostedRooms, let pause = room?.pausedDiscussion else { return }
+        try await hosted.continueDiscussion(roomKey, discussionEventId: pause.discussionEventId)
+    }
+
     // MARK: Messages
 
     static func messageId(entryId: String) -> String { "room-\(entryId)" }
@@ -284,8 +309,11 @@ import Foundation
 
     private func signature(_ room: GroupRoom, seats: [GroupSeat]) -> String {
         let turn = room.turn.map { "\($0.name)|\($0.thread)|\($0.waitingOnUser)" } ?? "-"
+        let approvals = room.pendingActions.map(\.id).joined(separator: ",")
+        let pause = room.pausedDiscussion?.discussionEventId ?? "-"
         return "\(room.name)|\(room.running)|\(turn)|\(room.holds.keys.sorted().joined(separator: ","))|\(seats.map(\.display).joined(separator: ","))"
             + "|\(room.undelivered.keys.sorted().joined(separator: ","))|\(engine.allRetrying.sorted().joined(separator: ","))"
+            + "|\(approvals)|\(pause)"
     }
 
     private func emit(_ change: ChatChange) { onChange?(change) }

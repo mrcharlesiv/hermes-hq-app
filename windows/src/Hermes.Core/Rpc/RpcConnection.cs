@@ -46,7 +46,9 @@ public sealed class RpcConnection : IAsyncDisposable
     // [questions] The socket generation (an answer's epoch), its capabilities call, and its declines_not_shown.
     private int _socketEpoch;
     private long _capabilitiesId = -1;
+    private long _identityCapabilitiesId = -1;
     private volatile bool _declinesNotShown;
+    private volatile bool _supportsClientActivity;
     private volatile bool _socketReady;
     private volatile bool _heartbeatLapsed;
     // [authority] This socket's gateway.ready named the session authority; each session's latest turn.
@@ -99,6 +101,16 @@ public sealed class RpcConnection : IAsyncDisposable
 
     /// The current socket's client.capabilities answer said declines_not_shown (spec 1x §2.1).
     public bool DeclinesNotShown => _declinesNotShown;
+    /// The current socket's client.capabilities answer said client_activity: true (Hermes 0.23.4+).
+    public bool SupportsClientActivity => _supportsClientActivity;
+
+    /// Reports active-session visibility via `client.activity` when supported by the connected gateway.
+    public async Task ReportClientActivityAsync(ClientActivityReport report, CancellationToken ct = default)
+    {
+        if (!_supportsClientActivity || State != ConnectionState.Open) return;
+        try { await RequestAsync("client.activity", report.ToJson(), TimeSpan.FromSeconds(5), ct); }
+        catch (GatewayException) { }
+    }
     /// The current socket's generation (answers report the one they went out on).
     public int SocketEpoch => _socketEpoch;
     /// [authority] The current socket's gateway.ready said `session_authority: true` (GatewayConnection.swift
@@ -283,7 +295,9 @@ public sealed class RpcConnection : IAsyncDisposable
                 _ws = null;
                 MarkSocketGone();
                 _declinesNotShown = false;
-                _capabilitiesId = -1;
+                _supportsClientActivity = false;
+                Interlocked.Exchange(ref _capabilitiesId, -1);
+                Interlocked.Exchange(ref _identityCapabilitiesId, -1);
                 FailAllPending();   // again: a call that registered while the read loop was ending
             }
             if (_life.IsCancellationRequested) return;
@@ -391,13 +405,27 @@ public sealed class RpcConnection : IAsyncDisposable
                         if (ServerRequestsEnabled)
                         {
                             var capId = Interlocked.Increment(ref _nextId);
-                            _capabilitiesId = capId;
+                            Interlocked.Exchange(ref _capabilitiesId, capId);
                             try
                             {
                                 await SendFrameAsync(new JsonObject
                                 {
                                     ["jsonrpc"] = "2.0", ["id"] = capId, ["method"] = "client.capabilities",
                                     ["params"] = new JsonObject { ["server_requests"] = true },
+                                }, socketLife.Token);
+                            }
+                            catch (GatewayException) { }
+                        }
+                        // [v0.23.4] Separate client identity announcement so older gateways rejecting `client` keep server_requests active.
+                        {
+                            var idCapId = Interlocked.Increment(ref _nextId);
+                            Interlocked.Exchange(ref _identityCapabilitiesId, idCapId);
+                            try
+                            {
+                                await SendFrameAsync(new JsonObject
+                                {
+                                    ["jsonrpc"] = "2.0", ["id"] = idCapId, ["method"] = "client.capabilities",
+                                    ["params"] = new JsonObject { ["client"] = ClientIdentity.Current().ToJson() },
                                 }, socketLife.Token);
                             }
                             catch (GatewayException) { }
@@ -453,10 +481,16 @@ public sealed class RpcConnection : IAsyncDisposable
                 // A response to one of ours (numeric id). Other string ids are heartbeat answers.
                 if (obj.Get("id") is JsonValue idv && idv.TryGetValue(out long id))
                 {
-                    if (id == _capabilitiesId)
+                    if (Interlocked.CompareExchange(ref _capabilitiesId, -1, id) == id)
                     {
-                        _capabilitiesId = -1;
-                        _declinesNotShown = obj.Obj("result").Bool("declines_not_shown") == true; // -32601: stays false
+                        var res = obj.Obj("result");
+                        _declinesNotShown = res.Bool("declines_not_shown") == true; // -32601: stays false
+                        if (res.Bool("client_activity") == true) _supportsClientActivity = true;
+                        continue;
+                    }
+                    if (Interlocked.CompareExchange(ref _identityCapabilitiesId, -1, id) == id)
+                    {
+                        if (obj.Obj("result").Bool("client_activity") == true) _supportsClientActivity = true;
                         continue;
                     }
                     // Taken out first (GatewayConnection.swift `settle`): the close's sweep can't fail it after this.

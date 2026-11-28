@@ -42,13 +42,22 @@ public static class SkillUsage
 
 public sealed record SkillInfo(string Name, string Description, string? Category, bool Enabled, int? Usage, string? Provenance)
 {
+    /// Locked against agent edits (`PUT /api/skills/lock`, Hermes 0.23.4+). User edits stay allowed.
+    public bool Locked { get; init; }
+
     public static SkillInfo? Read(JsonNode? row)
     {
         if (row.Text("name") is not { } name) return null;
         return new(name, row.Str("description") ?? "", row.Text("category"), row.Bool("enabled") ?? true,
-            SkillUsage.Read(row.Get("usage")), row.Text("provenance"));
+            SkillUsage.Read(row.Get("usage")), row.Text("provenance"))
+        {
+            Locked = row.Bool("locked") ?? false,
+        };
     }
 }
+
+/// Hub-installed skill with an upstream update (`GET /api/skills/hub/updates`, Hermes 0.23.2+).
+public sealed record SkillHubUpdate(string Name, string Identifier, string Source);
 
 public sealed record OfficialSkill(string Name, string Description, string Identifier, string? Category, bool Installed);
 

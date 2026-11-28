@@ -102,6 +102,7 @@ public sealed class QuestionCenter : IDisposable
     private readonly Dictionary<string, CancellationTokenSource> _clarifyWatch = [];
     private readonly Dictionary<string, CancellationTokenSource> _approvalWatch = [];
     private readonly Dictionary<string, (TimeSpan Value, DateTimeOffset At)> _timeouts = [];
+    private readonly HashSet<string> _approvalReceivedSent = [];
     private readonly List<ChatQuestions> _links = [];
     private readonly HashSet<string> _dirty = [];
     private HashSet<string> _knownIds = [];
@@ -261,15 +262,42 @@ public sealed class QuestionCenter : IDisposable
                 .ToDictionary(x => x.s, x => x.NeedsInput!.Value);
     }
 
+    private static ApprovalKind ApprovalKindFrom(JsonObject p) => p.Str("kind")?.Trim().ToLowerInvariant() switch
+    {
+        "access" => ApprovalKind.Access,
+        "network" => ApprovalKind.Network,
+        _ => ApprovalKind.Command,
+    };
+
+    private static ApprovalAccessLevel? AccessLevelFrom(JsonObject p) => p.Str("access")?.Trim().ToLowerInvariant() switch
+    {
+        "read" => ApprovalAccessLevel.Read,
+        "read_write" => ApprovalAccessLevel.ReadWrite,
+        _ => null,
+    };
+
+    private static bool IsSandboxApproval(Entry e) => e.Kind == PromptKind.Approval && ApprovalKindFrom(e.Params) != ApprovalKind.Command;
+
     private static ApprovalPrompt ApprovalFrom(Entry e)
     {
         var p = e.Params;
+        var kind = ApprovalKindFrom(p);
+        var isSandbox = kind != ApprovalKind.Command;
         var choices = p.Arr("choices")?.Select(J.AsString).Where(c => c != null).ToList()
             ?? (p.Bool("smart_denied") == true ? ["once", "deny"] : null);
-        var allowSession = choices?.Contains("session") ?? true;
+        // [v0.23.4] Sandbox approvals never offer "Allow for This Chat" (`session`), even if `choices` lists it.
+        var allowSession = !isSandbox && (choices?.Contains("session") ?? p.Bool("allow_session") != false);
         var allowAlways = choices?.Contains("always") ?? p.Bool("allow_permanent") != false;
         return new ApprovalPrompt(e.Id, p.Str("command") ?? "", p.Str("description") ?? "", allowSession, allowAlways,
-            ClockKey(e), e.FirstSeen, e.Answering, e.State == EntryState.Leaving);
+            ClockKey(e), e.FirstSeen, e.Answering, e.State == EntryState.Leaving)
+        {
+            Kind = kind,
+            Path = p.Str("path")?.Trim() is { Length: > 0 } path ? path : null,
+            AccessLevel = AccessLevelFrom(p),
+            Host = p.Str("host")?.Trim() is { Length: > 0 } host ? host : null,
+            Label = p.Str("label")?.Trim() is { Length: > 0 } label ? label : null,
+            Risk = p.Str("risk")?.Trim() is { Length: > 0 } risk ? risk : null,
+        };
     }
 
     private static string ClockKey(Entry e) => e.QueueRequestId is { Length: > 0 } r ? r : $"rpc:{e.Id}";
@@ -381,7 +409,23 @@ public sealed class QuestionCenter : IDisposable
             SendResult(r.Id, new JsonObject());
             return;
         }
+        if (kind == PromptKind.Approval)
+        {
+            var ak = ApprovalKindFrom(parameters);
+            if (ak == ApprovalKind.Access && string.IsNullOrWhiteSpace(parameters.Str("path")))
+            {
+                SendError(r.Id, -32602, "access approval requires non-empty path");
+                return;
+            }
+            if (ak == ApprovalKind.Network && string.IsNullOrWhiteSpace(parameters.Str("host")))
+            {
+                SendError(r.Id, -32602, "network approval requires non-empty host");
+                return;
+            }
+        }
         var queueRequest = kind == PromptKind.Approval && parameters.Str("request_id") is { Length: > 0 } q ? q : null;
+        if (kind == PromptKind.Approval && r.Replayed && queueRequest != null)
+            _approvalReceivedSent.Remove($"{session}\u0001{queueRequest}");
         var i = _entries.FindIndex(e => e.Id == r.Id);
         if (i >= 0)
         {
@@ -635,18 +679,23 @@ public sealed class QuestionCenter : IDisposable
         }
     }
 
-    /// Rule 6: the turn ended. A queue-only approval goes now (and the queue is read again). A request with an open srq
-    /// stays until a probe's authoritative open_requests confirms or prunes it.
+    /// Rule 6: the turn ended. A queue-only command approval goes now (and the queue is read again). Sandbox folder /
+    /// website queue-only approvals stay across turn end while still reconciling with the queue.
     private void TurnEnded(string session)
     {
         _liveTurns.Remove(session);
         var queueOnly = _entries.Where(e => e.SessionId == session && e.Kind == PromptKind.Approval && !e.SrqOpen
-            && e.State == EntryState.Open).ToList();
+            && e.State == EntryState.Open && !IsSandboxApproval(e)).ToList();
+        var hasSandboxQueueOnly = _entries.Any(e => e.SessionId == session && !e.SrqOpen && e.State == EntryState.Open && IsSandboxApproval(e));
         if (queueOnly.Count > 0)
         {
             foreach (var e in queueOnly) _entries.Remove(e);
             BumpApprovals(session);
             Changed(session);
+            ReplayApprovals(session);
+        }
+        else if (hasSandboxQueueOnly)
+        {
             ReplayApprovals(session);
         }
         if (_entries.Any(e => e.SessionId == session && e.SrqOpen)) ProbeSoon(session);
@@ -944,8 +993,38 @@ public sealed class QuestionCenter : IDisposable
 
     private bool IsOffline(GatewayException e) => e.Code == "offline" || !_transport.Connected;
 
-    /// Run, Reject, Allow for This Chat, Always Allow. Throws PromptAnswerException (the card opens again).
-    public async Task AnswerApprovalAsync(string id, ApprovalChoice choice)
+    /// Tells the gateway this client displayed a pending approval (`approval.received`, Hermes 0.23.4+), once per (session, request).
+    public void MarkApprovalDisplayed(string id)
+    {
+        JsonObject? parameters = null;
+        lock (_gate)
+        {
+            if (_shutDown) return;
+            if (_entries.FirstOrDefault(e => e.Id == id && e.Kind == PromptKind.Approval && e.State == EntryState.Open) is not { } e) return;
+            if (string.IsNullOrEmpty(e.QueueRequestId) || string.IsNullOrEmpty(e.SessionId)) return;
+            var requestId = e.QueueRequestId;
+            var dedupeKey = $"{e.SessionId}\u0001{requestId}";
+            if (!_approvalReceivedSent.Add(dedupeKey)) return;
+            if (_approvalReceivedSent.Count > 256)
+            {
+                _approvalReceivedSent.Clear();
+                _approvalReceivedSent.Add(dedupeKey);
+            }
+            parameters = new JsonObject { ["session_id"] = e.SessionId, ["request_id"] = requestId };
+            if (_runtimes.GetValueOrDefault(e.SessionId)?.Profile is { } profile) parameters["profile"] = profile;
+        }
+        if (parameters == null) return;
+        _ = Task.Run(async () =>
+        {
+            try { await _transport.CallAsync("approval.received", parameters, TimeSpan.FromSeconds(10)); }
+            catch (GatewayException) { }
+        });
+    }
+
+    /// Run, Reject, Allow for This Chat, Always Allow (with optional deny reason for sandbox approvals, capped at 500 chars).
+    public Task AnswerApprovalAsync(string id, ApprovalChoice choice) => AnswerApprovalAsync(id, choice, null);
+
+    public async Task AnswerApprovalAsync(string id, ApprovalChoice choice, string? reason)
     {
         Entry entry;
         lock (_gate)
@@ -957,11 +1036,19 @@ public sealed class QuestionCenter : IDisposable
             Changed(e.SessionId);
         }
         Flush();
+        var rawReason = reason?.Trim();
+        var trimmedReason = choice == ApprovalChoice.Deny && IsSandboxApproval(entry) && !string.IsNullOrEmpty(rawReason)
+            ? (rawReason.Length <= 500 ? rawReason : rawReason[..500])
+            : null;
         try
         {
             if (entry.SrqOpen)
-                await RespondOnceAsync(id, new JsonObject { ["choice"] = choice.Wire() }, ApprovalOffline, ApprovalFailed);
-            else await ApprovalRespondAsync(entry, choice);
+            {
+                var payload = new JsonObject { ["choice"] = choice.Wire() };
+                if (trimmedReason != null) payload["reason"] = trimmedReason;
+                await RespondOnceAsync(id, payload, ApprovalOffline, ApprovalFailed);
+            }
+            else await ApprovalRespondAsync(entry, choice, trimmedReason);
         }
         catch (PromptAnswerException)
         {
@@ -1021,10 +1108,11 @@ public sealed class QuestionCenter : IDisposable
     }
 
     /// A queue-backed approval with no srq: approval.respond (330 s, retried once on a timeout only).
-    private async Task ApprovalRespondAsync(Entry entry, ApprovalChoice choice)
+    private async Task ApprovalRespondAsync(Entry entry, ApprovalChoice choice, string? reason = null)
     {
         if (!_transport.Connected) throw new PromptAnswerException(ApprovalOffline, true);
         var parameters = new JsonObject { ["session_id"] = entry.SessionId, ["choice"] = choice.Wire(), ["all"] = false };
+        if (!string.IsNullOrEmpty(reason)) parameters["reason"] = reason;
         lock (_gate)
         {
             if (entry.QueueRequestId is { } request) parameters["request_id"] = request;

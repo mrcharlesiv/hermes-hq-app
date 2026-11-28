@@ -626,6 +626,20 @@ nonisolated enum ChatRowBuilder {
                                     kind: .modelFallback(fallbackRow), gapAbove: ChatMetrics.turnGap, variant: 0))
                 return
             }
+            if let refused = m.contentRefusedNotice {
+                let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let combined = body.isEmpty ? refused : "\(refused)\n\(body)"
+                rows.append(ChatRow(id: "\(m.id)|refused", messageId: m.id, scope: input.scope,
+                                    fingerprint: RowHash.of("refused", combined), kind: .notice(combined),
+                                    gapAbove: ChatMetrics.turnGap, variant: 0))
+                return
+            }
+            if m.pluginCard != nil, !text.isEmpty {
+                rows.append(ChatRow(id: "\(m.id)|pcard", messageId: m.id, scope: input.scope,
+                                    fingerprint: RowHash.of("pcard", text), kind: .notice(text),
+                                    gapAbove: ChatMetrics.turnGap, variant: 0))
+                return
+            }
             if !text.isEmpty {
                 rows.append(ChatRow(id: "\(m.id)|notice", messageId: m.id, scope: input.scope, fingerprint: RowHash.of(text),
                                     kind: .notice(text), gapAbove: ChatMetrics.turnGap, variant: 0))
@@ -1247,6 +1261,8 @@ nonisolated enum ChatRowBuilder {
             RowHash.add(t.title, to: &content)
             if let args = t.argsText { RowHash.addSampled(args, to: &content) } else { content.combine(-1) }
             if let summary = t.summary { RowHash.addSampled(summary, to: &content) } else { content.combine(-1) }
+            if let note = t.note { RowHash.add(note, to: &content) } else { content.combine(-2) }
+            content.combine(t.outputRisk)
         }
         RowHash.add(title, to: &content)
         RowHash.add(thought ?? "", to: &content)
@@ -1271,6 +1287,8 @@ nonisolated enum ChatRowBuilder {
             RowHash.add(t.title, to: &content)
             if let args = t.argsText { RowHash.addSampled(args, to: &content) } else { content.combine(-1) }
             if let summary = t.summary { RowHash.addSampled(summary, to: &content) } else { content.combine(-1) }
+            if let note = t.note { RowHash.add(note, to: &content) } else { content.combine(-2) }
+            content.combine(t.outputRisk)
         }
         content.combine(live)
         var variant = Hasher()

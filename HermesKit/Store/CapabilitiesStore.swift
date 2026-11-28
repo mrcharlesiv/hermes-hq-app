@@ -67,9 +67,11 @@ import Foundation
 
     nonisolated static func skill(_ row: JSONValue) -> SkillInfo? {
         guard let name = RosterText.trimmed(row["name"]) else { return nil }
+        let lockedField = row["locked"]?.bool
         return SkillInfo(name: name, description: RosterText.text(row["description"]), category: RosterText.trimmed(row["category"]),
                          enabled: row["enabled"]?.bool ?? true, usage: SkillUsage.read(row["usage"]),
-                         provenance: RosterText.trimmed(row["provenance"]))
+                         provenance: RosterText.trimmed(row["provenance"]), locked: lockedField ?? false,
+                         supportsLock: lockedField != nil)
     }
 
     func officialSkills(_ profile: String) async throws -> [OfficialSkill] {
@@ -125,6 +127,44 @@ import Foundation
             _ = try await client.rest("PUT", "/api/skills/toggle", query: [URLQueryItem(name: "profile", value: profile)],
                                       body: try? JSONValue.object(["name": .string(name), "enabled": .bool(enabled)]).encoded())
         }
+    }
+
+    /// Lock/unlock a skill against agent edits (`PUT /api/skills/lock`, Hermes 0.23.4+).
+    func setSkillLocked(_ name: String, locked: Bool, profile: String) async throws {
+        if readOnlyGateway { throw BotWriteError(title: "Couldn’t Change \(name)", reason: BotWriteError.readOnlyReason) }
+        try await serial(profile) { [client] in
+            _ = try await client.rest("PUT", "/api/skills/lock", query: [URLQueryItem(name: "profile", value: profile)],
+                                      body: try? JSONValue.object(["name": .string(name), "locked": .bool(locked)]).encoded())
+        }
+    }
+
+    /// Hub skills with a newer upstream version (`GET /api/skills/hub/updates`, 120 s timeout).
+    func skillUpdates(_ profile: String) async throws -> [SkillHubUpdate] {
+        let items = query(profile)
+        let data: Data
+        if let live = client as? LiveGatewayClient {
+            data = try await live.rest("GET", "/api/skills/hub/updates", query: items, body: nil, timeout: 120)
+        } else {
+            data = try await client.rest("GET", "/api/skills/hub/updates", query: items, body: nil)
+        }
+        return try Self.decodeSkillUpdates(data)
+    }
+
+    nonisolated static func decodeSkillUpdates(_ data: Data) throws -> [SkillHubUpdate] {
+        let value = try JSONValue.parseFast(data)
+        var seen = Set<String>()
+        return (value["updates"]?.array ?? []).compactMap { row -> SkillHubUpdate? in
+            guard let name = RosterText.trimmed(row["name"]) else { return nil }
+            let identifier = RosterText.trimmed(row["identifier"]) ?? name
+            let source = RosterText.trimmed(row["source"]) ?? ""
+            guard seen.insert(identifier).inserted else { return nil }
+            return SkillHubUpdate(name: name, identifier: identifier, source: source)
+        }
+    }
+
+    /// `POST /api/skills/hub/update` then polls `/api/actions/{name}/status` until finished.
+    func updateSkills(_ profile: String) -> AsyncThrowingStream<ActionStatus, Error> {
+        action(profile, path: "/api/skills/hub/update", body: .object([:]))
     }
 
     /// `POST /api/skills/hub/install {identifier}` then the action's status every 1.2 s until it ends.

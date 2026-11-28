@@ -133,11 +133,115 @@ nonisolated struct HostedRoomRef: Codable, Hashable, Sendable {
     var epoch: Int?
 }
 
+/// [hosted] Shared purpose, notes, and routing for a hosted group chat (`groups.context`, Hermes 0.23.2+).
+nonisolated struct HostedRoomContext: Codable, Hashable, Sendable {
+    var purpose: String = ""
+    var notes: String = ""
+    /// `"everyone"`, `"lead"`, or `"auto"`.
+    var routing: String = "everyone"
+    var leadMemberId: String = ""
+
+    static let maxNotesBytes = 4096
+    static let maxPurposeChars = 500
+
+    static func notesUTF8Count(_ text: String) -> Int {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).utf8.count
+    }
+
+    /// Collapses internal whitespace, trims, and caps purpose at 500 characters (matching upstream `groups.context`).
+    static func normalizePurpose(_ text: String) -> String {
+        let collapsed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return collapsed.count <= maxPurposeChars ? collapsed : String(collapsed.prefix(maxPurposeChars))
+    }
+
+    init(purpose: String = "", notes: String = "", routing: String = "everyone", leadMemberId: String = "") {
+        self.purpose = purpose
+        self.notes = notes
+        self.routing = routing.isEmpty ? "everyone" : routing
+        self.leadMemberId = leadMemberId
+    }
+
+    init?(json: JSONValue?) {
+        guard let object = json?.object else { return nil }
+        self.init(
+            purpose: object["purpose"]?.string ?? "",
+            notes: object["notes"]?.string ?? "",
+            routing: object["routing"]?.string ?? "everyone",
+            leadMemberId: object["lead_member_id"]?.string ?? ""
+        )
+    }
+}
+
+/// [hosted] One pending decision from `driver_status.pending_actions` (`groups.approve` / retry / discard).
+nonisolated struct HostedPendingAction: Hashable, Sendable, Identifiable {
+    var kind: String
+    var memberId: String
+    var taskId: String
+    var executionGeneration: Int
+    var requestId: String?
+    var command: String?
+    var description: String?
+    var choices: [String] = []
+
+    var id: String { "\(kind):\(taskId):\(executionGeneration):\(requestId ?? "")" }
+    var isApproval: Bool { kind == "approval" }
+    /// Allow Once is only permitted when the gateway gave a reviewable preview and exact request id.
+    var isReviewableApproval: Bool {
+        guard isApproval, let req = requestId, !req.isEmpty else { return false }
+        let cmd = command?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let desc = description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !cmd.isEmpty || !desc.isEmpty
+    }
+
+    init(kind: String, memberId: String, taskId: String, executionGeneration: Int,
+         requestId: String? = nil, command: String? = nil, description: String? = nil, choices: [String] = []) {
+        self.kind = kind
+        self.memberId = memberId
+        self.taskId = taskId
+        self.executionGeneration = executionGeneration
+        self.requestId = requestId
+        self.command = command
+        self.description = description
+        self.choices = choices
+    }
+
+    init?(json: JSONValue) {
+        guard let kind = json["kind"]?.string, !kind.isEmpty,
+              let memberId = json["member_id"]?.string, !memberId.isEmpty,
+              let taskId = json["task_id"]?.string, !taskId.isEmpty,
+              let generation = json["execution_generation"]?.int, generation >= 1 else { return nil }
+        let approval = json["approval"]
+        let reqId = json["request_id"]?.string
+            ?? approval?["request_id"]?.string
+            ?? approval?["prompt_id"]?.string
+        let choices = (approval?["choices"]?.array ?? []).compactMap(\.string)
+        let trimmedReqId = reqId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.init(
+            kind: kind,
+            memberId: memberId,
+            taskId: taskId,
+            executionGeneration: generation,
+            requestId: trimmedReqId?.isEmpty == false ? trimmedReqId : nil,
+            command: approval?["command"]?.string,
+            description: approval?["description"]?.string,
+            choices: choices
+        )
+    }
+}
+
+/// [hosted] A discussion paused at its round limit (`room.activity` `status == "bounded"`, resumed by `groups.continue`).
+nonisolated struct HostedRoomPause: Codable, Hashable, Sendable {
+    var discussionEventId: String
+    var threadId: String?
+}
+
 nonisolated struct GroupRoom: Codable, Sendable, Equatable {
     var name: String
     var roomId: String?
     /// [hosted] Set for a room Hermes runs on its gateway (see `HostedRoomRef`).
     var hosted: HostedRoomRef?
+    /// [hosted] Shared room context (purpose, notes, routing) as last read from `groups.state` or saved via `groups.context`.
+    var hostedContext: HostedRoomContext?
     var log: [GroupMessage] = []
     /// "<thread>::<memberKey>" → entries of the room log the member has seen (an index into `log`).
     var watermarks: [String: Int] = [:]
@@ -175,10 +279,20 @@ nonisolated struct GroupRoom: Codable, Sendable, Equatable {
     var running = false
     var turn: GroupTurnState?
     var stoppedEpoch: Int?
+    /// [hosted] Pending approvals / retries / discards reported by `groups.state` (`driver_status.pending_actions`).
+    var pendingActions: [HostedPendingAction] = []
+    /// [hosted] Bounded discussion waiting on `groups.continue`.
+    var pausedDiscussion: HostedRoomPause?
+    /// [hosted] Routing modes offered by the room driver (`driver_status.routing_modes`).
+    var routingModes: [String]?
+    /// [hosted] Max continues offered by the room driver (`driver_status.max_continues`).
+    var maxContinues: Int?
+    /// [hosted] Whether the gateway broadcasts `groups.changed` for this room.
+    var supportsChangeEvents = false
 
     enum CodingKeys: String, CodingKey {
         case name, roomId, log, watermarks, members, image, holdDetection, holds, heldMessages, sessions, stranded
-        case syncRevision, omitted, extra, pinned, sectionId, rosterOrder, undelivered, pinnedAt, removed, asking, hidden, hosted
+        case syncRevision, omitted, extra, pinned, sectionId, rosterOrder, undelivered, pinnedAt, removed, asking, hidden, hosted, hostedContext, pausedDiscussion
     }
 
     init(name: String, roomId: String? = nil) {
@@ -211,6 +325,8 @@ nonisolated struct GroupRoom: Codable, Sendable, Equatable {
         removed = (try? c.decodeIfPresent([String].self, forKey: .removed)) ?? []
         asking = (try? c.decodeIfPresent([String: GroupAsking].self, forKey: .asking)) ?? [:]
         hosted = try? c.decodeIfPresent(HostedRoomRef.self, forKey: .hosted)
+        hostedContext = try? c.decodeIfPresent(HostedRoomContext.self, forKey: .hostedContext)
+        pausedDiscussion = try? c.decodeIfPresent(HostedRoomPause.self, forKey: .pausedDiscussion)
     }
 
     /// At launch: every turn the last run left unanswered becomes a late reply to collect (§6.7, stress R1).

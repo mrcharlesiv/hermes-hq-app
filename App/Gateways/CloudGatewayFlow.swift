@@ -88,7 +88,8 @@ import UIKit
                 nav.pushViewController(page(CloudDeletePage(model: model, id: id), title: CloudCopy.deleteTitle), animated: demo == nil)
             case .desktop(let id):
                 // [cloud-desktop] The agent's own Hermes Desktop, pushed in the sheet (Back returns to its page).
-                guard let agent = model.agent(id), let url = CloudDesktopWeb.address(agent.dashboardURL) else { return }
+                guard let agent = model.agent(id),
+                      let url = CloudDesktopWeb.address(agent.dashboardURL, webapp: model.webappStatus[agent.id]) else { return }
                 nav.pushViewController(CloudDesktopWebController(url: url, agentName: agent.name), animated: demo == nil)
             }
         }
@@ -334,6 +335,8 @@ enum CloudCopy {
     var openHost: String?
     /// Agent id → Team Gateway as Portal last said.
     var teamGateways: [String: CloudTeamGateway] = [:]
+    /// [v0.23.5] Agent id → Webapp readiness & URL from `/api/status` (`webapp_state`, `webapp_url`).
+    var webappStatus: [String: CloudWebappStatus] = [:]
     /// The `agent` actions this Portal offers; empty until read (everything shows meanwhile).
     var offered: Set<CloudAction> = []
     /// Sizes resize takes (the schema's), else the price table's.

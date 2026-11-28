@@ -202,7 +202,7 @@ public sealed class NewBotInlineException(string message) : Exception(message);
 /// meta write, the Bot Chat and the intro are the Bots feature's (it opens the chat).
 public sealed class NewBotApi(IPagesGateway gw)
 {
-    public static readonly TimeSpan CreateTimeout = TimeSpan.FromSeconds(90);
+    public static readonly TimeSpan CreateTimeout = TimeSpan.FromSeconds(300);
 
     /// The exact keys `profiles.create` takes.
     public static JsonObject CreateParams(string slug, string descriptionText, string soul) => new()

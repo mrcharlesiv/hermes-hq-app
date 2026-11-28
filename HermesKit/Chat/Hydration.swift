@@ -314,7 +314,9 @@ nonisolated enum Hydration {
     // MARK: Timeline notices
 
     static let noticeKinds: Set<String> = ["model_switch", "async_delegation_complete", "process_complete", "auto_continue",
-                                           "personality_switch", "failed_turn", "scheduled_wake", "loop_wakeup"]
+                                           "personality_switch", "failed_turn", "scheduled_wake", "loop_wakeup",
+                                           "plugin_card", "content_refused"]
+    static let contentRefusedDefaultNotice = "Message withheld by safety filter"
     static let silentRunText = "Nothing to report — this run was silent"
     /// A turn Hermes picked up again after a restart; the chat draws nothing for it.
     static let autoContinueText = "resumed interrupted turn"
@@ -400,6 +402,12 @@ nonisolated enum Hydration {
             if let t = metadata?["display_text"]?.nonEmptyString ?? metadata?["title"]?.nonEmptyString { return t }
             if let wake = TimelineNotes.scheduledWake(content) { return wake.title }
             return kind == "loop_wakeup" ? "Loop wakeup" : "Scheduled check"
+        case "plugin_card":
+            // [v0.23.5] `content` holds the opaque model-facing line; display text rides `display_metadata` / `display_content`.
+            if let t = metadata?["display_text"]?.nonEmptyString ?? metadata?["text"]?.nonEmptyString { return t }
+            return content
+        case "content_refused":
+            return content
         default:
             if role == "assistant", kind != "hidden", isSilentRun(rawContent) { return silentRunText }
             return content
@@ -598,6 +606,10 @@ nonisolated private struct HMessage {
     var mineReactionRow: Int?
     /// Highest backend row folded in (a turn's final row sits under its first text row).
     var lastRowId: Int?
+    /// [v0.23.5] Plugin card metadata for live/history deduplication.
+    var pluginCard: PluginCard?
+    /// [v0.23.x] Safety-refusal notice for `content_refused` rows.
+    var contentRefusedNotice: String?
 }
 
 nonisolated private struct Folder {
@@ -943,6 +955,13 @@ nonisolated private struct Folder {
                 let detail = parsed?.detail ?? ChatText.trimmed(body)
                 message.asyncResult = detail.isEmpty ? nil : detail
                 message.job = shown
+            } else if kind == "plugin_card" {
+                message.pluginCard = PluginCard.parse(metadata?["plugin_card"] ?? metadata.map(JSONValue.object))
+            } else if kind == "content_refused" {
+                let block = metadata?["content_refused"]?.looseObject
+                message.contentRefusedNotice = block?["notice"]?.nonEmptyString
+                    ?? metadata?["notice"]?.nonEmptyString
+                    ?? Hydration.contentRefusedDefaultNotice
             }
             if row["_synthetic"] == .bool(true) { message.serverRowSpan = 0 }
             result.append(message)
@@ -1006,6 +1025,8 @@ nonisolated private struct Folder {
             message.reactions = h.reactions
             message.helperReport = h.helperReport
             message.job = h.job
+            message.pluginCard = h.pluginCard
+            message.contentRefusedNotice = h.contentRefusedNotice
             if let row = h.mineReactionRow ?? h.reactionRow, row != h.rowId { message.reactionRow = row }
             messages.append(message)
             if !meta.isDefault { metas[h.id] = meta }

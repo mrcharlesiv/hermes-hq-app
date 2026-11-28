@@ -146,3 +146,37 @@ public sealed class UpdateHermesModel(string name, OutdatedGateway info,
         onEnter();
     }
 }
+
+/// Hermes Cloud `/api/status` webapp readiness (Hermes 0.23.5+: `webapp_state`, `webapp_url`).
+public enum CloudWebappState { Ready, Starting, Down, NotAvailable }
+
+public sealed record CloudWebappStatus(CloudWebappState State, Uri? WebappUrl)
+{
+    public static CloudWebappStatus? From(JsonNode? status, Uri? gatewayUrl = null)
+    {
+        var rawState = status.Str("webapp_state")?.Trim().ToLowerInvariant();
+        CloudWebappState? state = rawState switch
+        {
+            "ready" => CloudWebappState.Ready,
+            "starting" => CloudWebappState.Starting,
+            "down" => CloudWebappState.Down,
+            "not_available" => CloudWebappState.NotAvailable,
+            _ => null,
+        };
+        if (state is null) return null;
+        var validUrl = ValidateUrl(status.Str("webapp_url")?.Trim(), gatewayUrl);
+        return new CloudWebappStatus(state.Value, validUrl);
+    }
+
+    /// Accepts only HTTPS URLs matching the agent's host or a `.nousresearch.com` subdomain.
+    public static Uri? ValidateUrl(string? raw, Uri? gatewayUrl)
+    {
+        if (string.IsNullOrWhiteSpace(raw) || !Uri.TryCreate(raw.Trim(), UriKind.Absolute, out var uri)) return null;
+        if (!string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase)) return null;
+        var host = uri.Host.ToLowerInvariant();
+        if (string.IsNullOrEmpty(host)) return null;
+        if (gatewayUrl is not null && string.Equals(host, gatewayUrl.Host, StringComparison.OrdinalIgnoreCase)) return uri;
+        if (host == "nousresearch.com" || host.EndsWith(".nousresearch.com", StringComparison.Ordinal)) return uri;
+        return null;
+    }
+}

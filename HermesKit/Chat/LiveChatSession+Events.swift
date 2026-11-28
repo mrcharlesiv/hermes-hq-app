@@ -186,6 +186,10 @@ extension LiveChatSession {
             flushDeltas(); onToolStart(p)
         case "tool.complete":
             flushDeltas(); onToolComplete(p)
+        case "tool.output_risk":
+            flushDeltas(); onToolOutputRisk(p)
+        case "plugin.card":
+            flushDeltas(); onPluginCard(p)
         case "status.update":
             switch p["kind"]?.string {
             case "compacting", "compressing": turn.compacting = true
@@ -215,6 +219,49 @@ extension LiveChatSession {
         case "session.title":
             if let t = p["title"]?.nonEmptyString { receiveAutomaticTitle(t) }
         default: break
+        }
+    }
+
+    /// [v0.23.5] Durable display-only card posted by a plugin (`ctx.post_card` → `plugin.card`).
+    private func onPluginCard(_ p: JSONValue) {
+        let text = LiveChatSession.coerceText(p["text"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let card = PluginCard.parse(p) else { return }
+        let id = "plugin-card-\(card.pluginId)-\(card.cardId)"
+        let already = messages.contains {
+            $0.id == id || ($0.pluginCard?.pluginId == card.pluginId && $0.pluginCard?.cardId == card.cardId)
+        }
+        guard !already else { return }
+        var msg = ChatMessage(id: id, role: .system, parts: [.text(text)], timestamp: Date(), rowId: nil)
+        msg.pluginCard = card
+        appendMessage(msg)
+        var meta = MessageMeta()
+        meta.systemNotice = true
+        meta.serverRowSpan = 0
+        metaById[id] = meta
+    }
+
+    /// [v0.23.x] Risk notice attached to a running or recently finished tool call (`tool.output_risk`).
+    private func onToolOutputRisk(_ p: JSONValue) {
+        guard let toolId = p["tool_id"]?.string, !toolId.isEmpty,
+              let risk = p["risk"]?.string, !risk.isEmpty else { return }
+        let findings = (p["findings"]?.array ?? []).compactMap(\.string)
+        let redacted = p["redacted"]?.bool ?? false
+        let info = ToolOutputRisk(risk: risk, findings: findings, redacted: redacted)
+        let summary = redacted ? "Output redacted (\(risk))" : "Output risk: \(risk)"
+        let targetId = turn.streamId ?? messages.last(where: { $0.role == .assistant })?.id
+        guard let targetId else { return }
+        updateMessage(targetId) { message in
+            guard let idx = message.parts.lastIndex(where: {
+                if case .tool(let call) = $0 { return call.id == toolId }
+                return false
+            }), case .tool(var call) = message.parts[idx] else { return }
+            call.outputRisk = info
+            if let existing = call.note?.trimmingCharacters(in: .whitespacesAndNewlines), !existing.isEmpty {
+                if !existing.contains(summary) { call.note = "\(existing) · \(summary)" }
+            } else {
+                call.note = summary
+            }
+            message.parts[idx] = .tool(call)
         }
     }
 

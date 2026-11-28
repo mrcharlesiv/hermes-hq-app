@@ -145,6 +145,101 @@ public sealed record MessagingPlatform(string Id, string Name, string Descriptio
             .ThenBy(p => p.Name, StringComparer.CurrentCultureIgnoreCase)];
 }
 
+/// Catalog platform offered in `GET /api/messaging/platforms` (`available[]`, Hermes 0.23.5+).
+public sealed record MessagingCatalogPlatform(
+    string Name,
+    string Title = "",
+    string Summary = "",
+    string Badge = "verified",
+    string Disclosure = "",
+    string Blocked = "",
+    string BlockedReason = "",
+    string InstallCommand = "")
+{
+    public bool IsBlocked => !string.IsNullOrWhiteSpace(Blocked);
+    public string BadgeWord => Badge.Equals("official", StringComparison.OrdinalIgnoreCase) ? "Official" : "Verified";
+
+    public static MessagingCatalogPlatform? From(JsonNode? json)
+    {
+        var name = PagesRest.PgString(json.Get("name"))?.Trim();
+        if (string.IsNullOrEmpty(name)) return null;
+        var title = json.Str("title") ?? "";
+        var badge = json.Str("badge") ?? "";
+        return new MessagingCatalogPlatform(
+            name,
+            title.Length == 0 ? name : title,
+            json.Str("summary") ?? "",
+            badge.Length == 0 ? "verified" : badge,
+            json.Str("disclosure") ?? "",
+            json.Str("blocked") ?? "",
+            json.Str("blocked_reason") ?? "",
+            json.Str("install_command") ?? "");
+    }
+
+    public static IReadOnlyList<MessagingCatalogPlatform> List(JsonNode? json)
+    {
+        var seen = new HashSet<string>();
+        return [.. (json.Arr("available") ?? []).Select(From).OfType<MessagingCatalogPlatform>().Where(c => seen.Add(c.Name))];
+    }
+
+    public bool Matches(string query)
+    {
+        var words = query.Trim().ToLowerInvariant();
+        if (words.Length == 0) return true;
+        return new[] { Name, Title, Summary }.Any(s => s.ToLowerInvariant().Contains(words));
+    }
+}
+
+/// Answer to `POST /api/messaging/catalog/{name}/install` (Hermes 0.23.5+).
+public sealed record MessagingCatalogInstallResult(
+    bool Ok,
+    string? PluginName = null,
+    IReadOnlyList<string>? Platforms = null,
+    string? Error = null,
+    string? InstallCommand = null,
+    IReadOnlyList<string>? Warnings = null)
+{
+    public IReadOnlyList<string> RegisteredPlatforms => Platforms ?? [];
+    public IReadOnlyList<string> WarningList => Warnings ?? [];
+
+    public static MessagingCatalogInstallResult From(JsonNode? json)
+    {
+        var err = json.Str("error")?.Trim();
+        var cmd = json.Str("install_command")?.Trim();
+        return new MessagingCatalogInstallResult(
+            json.Bool("ok") ?? false,
+            PagesRest.PgString(json.Get("plugin_name")),
+            [.. (json.Arr("platforms") ?? []).Select(PagesRest.PgString).Where(s => !string.IsNullOrEmpty(s)).OfType<string>()],
+            string.IsNullOrEmpty(err) ? null : err,
+            string.IsNullOrEmpty(cmd) ? null : cmd,
+            [.. (json.Arr("warnings") ?? []).Select(J.AsString).Where(s => !string.IsNullOrEmpty(s)).OfType<string>()]);
+    }
+}
+
+/// Live-apply verdict returned on `PUT /api/messaging/platforms/{id}` (`live`, Hermes 0.23.5+).
+public sealed record MessagingLiveApply(bool Applied, string? State = null, string? Detail = null)
+{
+    public static MessagingLiveApply? From(JsonNode? json) =>
+        json is JsonObject o ? new MessagingLiveApply(o.Bool("applied") ?? false, o.Str("state"), o.Str("detail")) : null;
+}
+
+/// Full result of `PUT /api/messaging/platforms/{id}` combining `live` (0.23.5+) and legacy `hot_served`.
+public sealed record MessagingUpdateResult(bool HotServed = false, MessagingLiveApply? Live = null)
+{
+    public bool AppliedLive => Live?.Applied ?? HotServed;
+    public bool NeedsCredentials => string.Equals(Live?.State?.Trim(), "not_configured", StringComparison.OrdinalIgnoreCase);
+    public bool RequiresRestart => !NeedsCredentials && !AppliedLive;
+    public string? RestartDetail => Live is { Applied: false } && Live.Detail?.Trim() is { Length: > 0 } d ? d : null;
+
+    public static MessagingUpdateResult From(JsonNode? json) =>
+        new(json.Bool("hot_served") ?? false, MessagingLiveApply.From(json.Get("live")));
+}
+
+public sealed record MessagingPlatformsPage(
+    IReadOnlyList<MessagingPlatform> Platforms,
+    IReadOnlyList<MessagingCatalogPlatform> Available,
+    string? Signature = null);
+
 public sealed record PairingPerson(string Platform, string UserId, string? UserName = null, string? RequestId = null, double? AgeMinutes = null)
 {
     public string Id => $"{Platform}:{UserId}";
@@ -268,20 +363,46 @@ public sealed class MessagingApi(IPagesGateway gw)
 {
     private static readonly TimeSpan Thirty = TimeSpan.FromSeconds(30);
 
-    public async Task<IReadOnlyList<MessagingPlatform>> PlatformsAsync(string? profile, CancellationToken ct = default)
+    public async Task<MessagingPlatformsPage> PlatformsPageAsync(string? profile, CancellationToken ct = default)
     {
         var answer = await PagesRest.JsonAsync(gw, "GET", "/api/messaging/platforms", PagesRest.ProfileQuery(profile), timeout: Thirty, ct: ct);
         if (answer.Arr("platforms") == null) throw PagesRest.UnreadableAnswer(answer);
-        return MessagingPlatform.List(answer);
+        return new MessagingPlatformsPage(
+            MessagingPlatform.List(answer),
+            MessagingCatalogPlatform.List(answer),
+            PagesRest.PgString(answer.Get("signature")));
     }
 
-    /// Returns `hot_served`: the running gateway took the change at once, no restart needed.
-    public async Task<bool> UpdateAsync(string platform, JsonObject body, string? profile, CancellationToken ct = default)
+    public async Task<IReadOnlyList<MessagingPlatform>> PlatformsAsync(string? profile, CancellationToken ct = default) =>
+        (await PlatformsPageAsync(profile, ct)).Platforms;
+
+    /// Lightweight digest polled for platform list changes (`GET /api/messaging/platforms/signature`, Hermes 0.23.5+).
+    public async Task<string?> SignatureAsync(string? profile, CancellationToken ct = default)
+    {
+        var answer = await PagesRest.JsonAsync(gw, "GET", "/api/messaging/platforms/signature",
+            PagesRest.ProfileQuery(profile), timeout: TimeSpan.FromSeconds(15), ct: ct);
+        return PagesRest.PgString(answer.Get("signature"));
+    }
+
+    /// Installs and enables one catalog platform (`POST /api/messaging/catalog/{name}/install`, 300 s timeout).
+    public async Task<MessagingCatalogInstallResult> InstallCatalogAsync(string name, string? profile, CancellationToken ct = default)
+    {
+        var answer = await PagesRest.JsonAsync(gw, "POST", $"/api/messaging/catalog/{PagesRest.Segment(name)}/install",
+            PagesRest.ProfileQuery(profile), new JsonObject(), TimeSpan.FromSeconds(300), ct);
+        return MessagingCatalogInstallResult.From(answer);
+    }
+
+    /// Full update response carrying both `live` (0.23.5+) and legacy `hot_served`.
+    public async Task<MessagingUpdateResult> UpdateWithLiveAsync(string platform, JsonObject body, string? profile, CancellationToken ct = default)
     {
         var answer = await PagesRest.JsonAsync(gw, "PUT", "/api/messaging/platforms/" + PagesRest.Segment(platform),
             PagesRest.ProfileQuery(profile), body, Thirty, ct);
-        return answer.Bool("hot_served") ?? false;
+        return MessagingUpdateResult.From(answer);
     }
+
+    /// Returns whether the running gateway applied the change live (`live.applied` or legacy `hot_served`).
+    public async Task<bool> UpdateAsync(string platform, JsonObject body, string? profile, CancellationToken ct = default) =>
+        (await UpdateWithLiveAsync(platform, body, profile, ct)).AppliedLive;
 
     public async Task<MessagingTestResult> TestAsync(string platform, string? profile, CancellationToken ct = default) =>
         MessagingTestResult.From(await PagesRest.JsonAsync(gw, "POST", $"/api/messaging/platforms/{PagesRest.Segment(platform)}/test",

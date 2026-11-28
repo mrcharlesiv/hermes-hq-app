@@ -112,11 +112,15 @@ private struct CloudAgentDetail: View {
                     .padding(.bottom, 26)
 
                 // [cloud-desktop] The agent's own Hermes Desktop (Hermes 0.23's Webapp), inside the app.
-                if up, !agent.isFailed, CloudDesktopWeb.address(agent.dashboardURL) != nil {
-                    CloudActionRow(symbol: "macwindow", tint: Color.hqTint, title: CloudDesktopWeb.menuTitle, detail: CloudDesktopWeb.rowDetail,
+                let webapp = model.webappStatus[agent.id]
+                if up, !agent.isFailed, CloudDesktopWeb.address(agent.dashboardURL, webapp: webapp) != nil {
+                    let webappBlocked = webapp?.state == .notAvailable
+                    CloudActionRow(symbol: "macwindow", tint: webappBlocked ? Color.hqLabel2 : Color.hqTint,
+                                   title: CloudDesktopWeb.menuTitle,
+                                   detail: webapp?.rowDetail ?? CloudDesktopWeb.rowDetail,
                                    id: "cloud-agent.desktop") { model.onRoute?(.desktop(agent.id)) }
                         .cloudCard()
-                        .disabled(busy != nil)
+                        .disabled(busy != nil || webappBlocked)
                         .padding(.bottom, 22)
                 }
 

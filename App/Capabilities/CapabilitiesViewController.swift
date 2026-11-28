@@ -49,6 +49,12 @@ final class CapabilitiesViewController: UIHostingController<HQScaledRoot<Capabil
         var items: [UIMenuElement] = [UIAction(title: "Refresh", image: UIImage(systemName: "arrow.clockwise")) { _ in Task { await model.refresh() } }]
         switch model.tab {
         case .skills:
+            if !model.readOnly {
+                let check = UIAction(title: model.checkingSkillUpdates ? "Checking for Updates…" : "Check for Updates",
+                                     image: UIImage(systemName: "arrow.down.circle")) { _ in model.checkSkillUpdates(silent: false) }
+                if model.checkingSkillUpdates || model.updatingSkills || !model.isConnected { check.attributes = .disabled }
+                items.append(check)
+            }
             items.append(UIAction(title: "Marketplace", image: UIImage(systemName: "bag")) { [weak self] _ in   // [marketplace]
                 guard let self else { return }
                 self.rootView.router.push(MarketplaceController(model: model, router: self.rootView.router, kind: .skills))
@@ -375,6 +381,42 @@ struct SkillsSections: View {
                 Section { Text("No Results for “\(model.query)”").foregroundStyle(Color.hqLabel2).padding(.vertical, 12) }
                 HubSection(model: model)
             } else {
+                if !model.skillUpdates.isEmpty, !model.readOnly, model.query.isEmpty {
+                    Section {
+                        ForEach(model.skillUpdates) { update in
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: SkillRowMetrics.lineGap) {
+                                    Text(DisplayName.title(update.name))
+                                        .font(Font.hq(.body).weight(SkillRowMetrics.titleWeight))
+                                        .foregroundStyle(Color.hqLabel)
+                                    if !update.source.isEmpty {
+                                        Text(update.source)
+                                            .font(Font.hq(.caption))
+                                            .foregroundStyle(Color.hqLabel2)
+                                    }
+                                }
+                                Spacer(minLength: 8)
+                            }
+                            .padding(.vertical, SkillRowMetrics.pad)
+                            .accessibilityIdentifier("skill-update-\(update.name)")
+                        }
+                        if model.updatingSkills {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Updating skills…")
+                                    .font(Font.hq(.subheadline))
+                                    .foregroundStyle(Color.hqLabel2)
+                            }
+                            .padding(.vertical, 3)
+                        } else {
+                            Button("Update All") { model.updateAllSkills() }
+                                .font(Font.hq(.body).weight(.semibold))
+                                .accessibilityIdentifier("skills.update-all")
+                        }
+                    } header: { HQSectionLabel {
+                        Text("Updates Available")
+                    } }
+                }
                 Section {
                     if let notice = model.skillsNotice {
                         NoticeRow(text: notice, symbol: "checkmark.circle.fill").accessibilityIdentifier("skills.notice")
@@ -473,7 +515,10 @@ struct SkillRow: View {
     var caption: String {
         let category = DisplayName.title(skill.category ?? "general")
         let used = skill.usage ?? 0
-        return used > 0 ? "\(category) · Used \(used) \(used == 1 ? "time" : "times")" : category
+        var parts = [category]
+        if used > 0 { parts.append("Used \(used) \(used == 1 ? "time" : "times")") }
+        if skill.locked { parts.append("Locked") }
+        return parts.joined(separator: " · ")
     }
 
     var body: some View {

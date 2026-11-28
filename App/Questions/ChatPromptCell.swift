@@ -312,7 +312,7 @@ final class ChatPromptCell: ChatBaseCell {
             buttons[kind] = button
             button.isHidden = false
             button.frame = frame
-            button.configuration = config(kind, font: al.buttonFont, answering: a.answering.map { matches(kind, $0) } ?? false)
+            button.configuration = config(kind, approvalKind: a.kind, font: al.buttonFont, answering: a.answering.map { matches(kind, $0) } ?? false)
             button.isEnabled = a.answering == nil || matches(kind, a.answering!)
             button.isUserInteractionEnabled = a.answering == nil && !a.leaving
             if kind == .more { button.menu = moreMenu(a) }
@@ -437,7 +437,7 @@ final class ChatPromptCell: ChatBaseCell {
         return button
     }
 
-    private func config(_ kind: ApprovalButton, font: UIFont, answering: Bool) -> UIButton.Configuration {
+    private func config(_ kind: ApprovalButton, approvalKind: ApprovalKind, font: UIFont, answering: Bool) -> UIButton.Configuration {
         var c: UIButton.Configuration
         switch kind {
         case .run:
@@ -454,7 +454,7 @@ final class ChatPromptCell: ChatBaseCell {
         }
         c.cornerStyle = .capsule
         c.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 14)
-        c.title = PromptLayout.buttonTitle(kind)
+        c.title = PromptLayout.buttonTitle(kind, approvalKind: approvalKind)
         c.titleLineBreakMode = .byTruncatingTail
         c.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attrs in
             var a = attrs

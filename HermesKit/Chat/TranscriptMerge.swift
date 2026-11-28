@@ -191,7 +191,10 @@ nonisolated enum TranscriptMerge {
             case .user:
                 found = fresh.indices.first { j in
                     let f = fresh[j]
-                    guard j > lastFreshIndex, !matchedFresh.contains(f.id), f.role == .user else { return false }
+                    // [v0.23.x] A safety-refused user prompt hydrates as a system notice (`content_refused`);
+                    // still match it to the optimistic local user bubble so the prompt never renders twice.
+                    let isRefusedUser = f.role == .system && f.contentRefusedNotice != nil
+                    guard j > lastFreshIndex, !matchedFresh.contains(f.id), f.role == .user || isRefusedUser else { return false }
                     if let row = local.rowId {
                         // Same backend row: claim it even when a stored copy is already on screen (that copy goes).
                         return f.rowId == row && unowned(f.id)

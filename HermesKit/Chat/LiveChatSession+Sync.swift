@@ -145,6 +145,28 @@ extension LiveChatSession {
         turnMarksFollowAliases()   // [transcript] §6.6: a live reply's mark follows it to its stored id
         var result = graft.messages
         var meta = graft.meta
+        // [v0.23.5] Dedupe live `plugin.card` messages against stored history (mirrors `withoutStoredPluginCards`):
+        // keep any live plugin card whose `(pluginId, cardId)` is not yet in the fetched page, re-inserting it after
+        // the message it followed rather than appending at the end.
+        let storedPluginCards = Set(result.compactMap { m -> String? in
+            guard let c = m.pluginCard else { return nil }
+            return "\(c.pluginId)\u{0}\(c.cardId)"
+        })
+        for (prevIdx, liveCard) in previous.enumerated() where liveCard.pluginCard != nil && liveCard.id.hasPrefix("plugin-card-") {
+            guard let c = liveCard.pluginCard else { continue }
+            let key = "\(c.pluginId)\u{0}\(c.cardId)"
+            guard !storedPluginCards.contains(key), !result.contains(where: { $0.id == liveCard.id }) else { continue }
+            let anchorId = previous[..<prevIdx].last { prev in
+                let displayed = graft.aliases[prev.id] ?? prev.id
+                return result.contains { $0.id == displayed || $0.id == prev.id }
+            }.map { graft.aliases[$0.id] ?? $0.id }
+            if let anchorId, let pos = result.firstIndex(where: { $0.id == anchorId }) {
+                result.insert(liveCard, at: pos + 1)
+            } else {
+                result.append(liveCard)
+            }
+            if let mm = metaById[liveCard.id] { meta[liveCard.id] = mm }
+        }
         if let carried {
             // Back where it was: before the row that followed it, else at the newest end.
             let at = carried.next.flatMap { next in result.firstIndex { $0.id == next } } ?? result.count

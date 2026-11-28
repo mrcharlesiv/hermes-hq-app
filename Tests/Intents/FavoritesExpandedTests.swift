@@ -180,6 +180,38 @@ import Testing
             #expect(!tiles.isEmpty, "preset \(preset.rawValue) has tiles")
         }
     }
+
+    @Test func favoritesV2LiveCardsRoundTripAndRoute() {
+        let box = IntentsDefaults()
+        var list = QuickTileList()
+
+        let approvals = QuickTile(id: "t-app", kind: .approvals, name: "Approvals", size: .wide)
+        let activeRuns = QuickTile(id: "t-act", kind: .activeRuns, name: "Active Now", size: .wide)
+        var inlineAsk = QuickTile(id: "t-ask", kind: .inlineAsk, name: "Ask Otto", size: .wide)
+        inlineAsk.bot = "otto"
+        inlineAsk.botName = "Otto"
+        var peek = QuickTile(id: "t-peek", kind: .livePeek, name: "Browser & Screen", size: .wide)
+        peek.bot = "otto"
+        peek.botName = "Otto"
+
+        list.add(approvals)
+        list.add(activeRuns)
+        list.add(inlineAsk)
+        list.add(peek)
+
+        #expect(QuickTileStore.save(list, box.defaults))
+        let back = QuickTileStore.load(box.defaults)
+        #expect(back.tiles == list.tiles)
+        #expect(QuickTileKind.approvals.isLiveCard && QuickTileKind.activeRuns.isLiveCard)
+        #expect(QuickTileKind.inlineAsk.isLiveCard && QuickTileKind.inlineAsk.needsBot)
+        #expect(QuickTileKind.livePeek.isLiveCard && !QuickTileKind.livePeek.needsBot)
+
+        let world = QuickTileWorld(bots: ["otto": "Otto"], currentGatewayId: "gw-1")
+        #expect(QuickTileRoute.make(approvals, world: world) == .approvals)
+        #expect(QuickTileRoute.make(activeRuns, world: world) == .activeRuns)
+        #expect(QuickTileRoute.make(inlineAsk, world: world) == .inlineAsk(profile: "otto"))
+        #expect(QuickTileRoute.make(peek, world: world) == .livePeek(profile: "otto"))
+    }
 }
 
 @Suite struct FavoritesBentoLayoutTests {
@@ -188,6 +220,39 @@ import Testing
             width: width, gap: 12, stacked: stacked, scale: 1,
             actionTallHeight: 120, actionShortHeight: 60, miniHeight: 74, sectionHeight: 34, dashboardNameHeight: 20
         )
+    }
+
+    @Test func compactWideHeightEliminatesEmptyHoleOnHorizontalLiveCards() {
+        var bot = QuickTile(id: "b", kind: .botCard, name: "Otto", size: .wide)
+        bot.bot = "otto"
+        var goal = QuickTile(id: "g", kind: .goal, name: "Launch", size: .wide)
+        goal.goalId = "g1"
+        var singleJob = QuickTile(id: "j1", kind: .jobCard, name: "Brief", size: .wide)
+        singleJob.job = "otto|brief"
+        let upcomingJobs = QuickTile(id: "j2", kind: .jobCard, name: "Upcoming", size: .wide)
+        let today = QuickTile(id: "t", kind: .tasks, name: "Today", size: .wide)
+        let inlineAsk = QuickTile(id: "ask", kind: .inlineAsk, name: "Ask Otto", size: .wide)
+        let peek = QuickTile(id: "pk", kind: .livePeek, name: "Browser", size: .wide)
+        let gwSmall = QuickTile(id: "gw", kind: .gatewayStatus, name: "Gateway", size: .small)
+
+        #expect(QuickTileLayout.usesCompactWideHeight(bot))
+        #expect(QuickTileLayout.usesCompactWideHeight(goal))
+        #expect(QuickTileLayout.usesCompactWideHeight(singleJob))
+        #expect(QuickTileLayout.usesCompactWideHeight(inlineAsk))
+        #expect(QuickTileLayout.usesCompactWideHeight(peek))
+        #expect(!QuickTileLayout.usesCompactWideHeight(upcomingJobs))
+        #expect(!QuickTileLayout.usesCompactWideHeight(today))
+        #expect(!QuickTileLayout.usesCompactWideHeight(gwSmall))
+
+        let layout = QuickTileLayout.compute([bot, today, inlineAsk, gwSmall], metrics: metrics(width: 370))
+        let hBot = layout.placements[0].frame.height
+        let hToday = layout.placements[1].frame.height
+        let hAsk = layout.placements[2].frame.height
+        let hGw = layout.placements[3].frame.height
+        #expect(hBot == 134, "compact Wide cards sit tightly at 134pt instead of 179pt square")
+        #expect(hAsk == 108, "tight single-control Wide cards (Inline Ask / Live Peek) sit at 108pt with zero dead space")
+        #expect(hToday > hBot + 30, "multi-row Wide list cards keep full 4-row height")
+        #expect(hGw > hBot + 30, "Small 1x1 square widgets stay square")
     }
 
     @Test func responsiveColumnCountsScaleAcrossDevices() {

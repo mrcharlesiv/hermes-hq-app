@@ -31,6 +31,11 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
     private var pagesHost: UIHostingController<HQScaledRoot<FavoritePagesBand>>?
     private var pagesHeight: NSLayoutConstraint?
 
+    // Lightweight live TileMaker progress / starter explore strip (outside collectionView cells so grid IDs stay pure)
+    private let bannerModel = FavoriteTopBannerModel()
+    private var bannerHost: UIHostingController<HQScaledRoot<FavoriteTopBannerView>>?
+    private var bannerHeight: NSLayoutConstraint?
+
     // Optional search controller
     private lazy var searchController: UISearchController = {
         let controller = UISearchController(searchResultsController: nil)
@@ -76,7 +81,7 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
 
     private lazy var addBarItem: UIBarButtonItem = {
         let item = UIBarButtonItem(image: UIImage(systemName: "plus"), primaryAction: UIAction { [weak self] _ in
-            self?.showAdd()
+            self?.showGallery()
         })
         item.accessibilityLabel = "Add to Favorites"
         item.accessibilityIdentifier = "quick-actions.add"
@@ -94,25 +99,26 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
     private var stacked: Bool { traitCollection.preferredContentSizeCategory >= .accessibilityExtraLarge }
     private var gap: CGFloat { HQFont.scaled(12) }
 
-    override var canBecomeFirstResponder: Bool { true }
+    /// Restrict first-responder keyboard shortcuts to Mac and modal sheets so opening nav menus on iPhone never raises the software keyboard.
+    override var canBecomeFirstResponder: Bool { DeviceWord.isMac || inSheet }
 
     override var keyCommands: [UIKeyCommand]? {
         var commands: [UIKeyCommand] = [
-            UIKeyCommand(title: "Add to Favorites", action: #selector(keyAdd), input: "n", modifierFlags: .command),
+            UIKeyCommand(title: "Add to Favorites", action: #selector(keyAdd), input: "n", modifierFlags: [.command, .shift]),
             UIKeyCommand(title: "Refresh Favorites", action: #selector(keyRefresh), input: "r", modifierFlags: .command),
-            UIKeyCommand(title: "Search Favorites", action: #selector(keySearch), input: "f", modifierFlags: .command),
+            UIKeyCommand(title: "Search Favorites", action: #selector(keySearch), input: "f", modifierFlags: [.command, .alternate]),
         ]
-        // ⌘1–⌘9 trigger the first 9 non-section tiles on the current page.
+        // ⌥⌘1–⌥⌘9 trigger the first 9 non-section tiles on the current page without colliding with global ⌘1–⌘9 tab switching.
         let actionable = displayedTiles().filter { $0.known != .section }
         for idx in 0..<min(9, actionable.count) {
             let cmd = UIKeyCommand(title: actionable[idx].name, action: #selector(keyRunSlot(_:)),
-                                   input: "\(idx + 1)", modifierFlags: .command, propertyList: idx)
+                                   input: "\(idx + 1)", modifierFlags: [.command, .alternate], propertyList: idx)
             commands.append(cmd)
         }
         return (super.keyCommands ?? []) + commands
     }
 
-    @objc private func keyAdd() { showAdd() }
+    @objc private func keyAdd() { showGallery() }
     @objc private func keyRefresh() { Task { await liveModel.refreshAll(); reload() } }
     @objc private func keySearch() { toggleSearch(true) }
     @objc private func keyRunSlot(_ command: UIKeyCommand) {
@@ -125,7 +131,7 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = inSheet ? HQPalette.sheetPage : HQPalette.groupedPage
+        view.backgroundColor = inSheet ? HQPalette.sheetPage : HQPalette.paneGroupedPage
         view.accessibilityIdentifier = "quick-actions.page"
         definesPresentationContext = true
 
@@ -205,7 +211,10 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
         // updates' mark or its bot working on it: the Dashboard tiles here follow.
         for name in [ArtifactPins.didChange, ArtifactHidden.didChange, ArtifactPins.viewChanged, TileUpdates.changed, TileMaker.changed] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.dashboardChanged() }
+                MainActor.assumeIsolated {
+                    self?.dashboardChanged()
+                    self?.syncTopBanner()
+                }
             })
         }
         observers.append(center.addObserver(forName: TileMaker.tileChanged, object: nil, queue: .main) { [weak self] note in
@@ -264,18 +273,46 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
         view.addSubview(host.view)
         host.didMove(toParent: self)
         let heightConstraint = host.view.heightAnchor.constraint(equalToConstant: 0)
+
+        let bannerView = FavoriteTopBannerView(
+            model: bannerModel,
+            onExplore: { [weak self] in self?.showGallery() },
+            onDismissExplore: { [weak self] in
+                UserDefaults.standard.set(true, forKey: QuickTileStore.dismissedExploreKey)
+                self?.syncTopBanner()
+            },
+            onOpenMaker: { [weak self] profile in
+                guard let self else { return }
+                QuickActionsRouter.openBotChat(profile: profile, from: self)
+            }
+        )
+        let bHost = UIHostingController(rootView: HQScaledRoot(bannerView))
+        bHost.view.backgroundColor = .clear
+        bHost.view.translatesAutoresizingMaskIntoConstraints = false
+        bHost.view.isHidden = true
+        addChild(bHost)
+        view.addSubview(bHost.view)
+        bHost.didMove(toParent: self)
+        let bHeight = bHost.view.heightAnchor.constraint(equalToConstant: 0)
+
         NSLayoutConstraint.activate([
             host.view.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             heightConstraint,
-            collectionView.topAnchor.constraint(equalTo: host.view.bottomAnchor),
+            bHost.view.topAnchor.constraint(equalTo: host.view.bottomAnchor),
+            bHost.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bHost.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bHeight,
+            collectionView.topAnchor.constraint(equalTo: bHost.view.bottomAnchor),
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
         pagesHost = host
         pagesHeight = heightConstraint
+        bannerHost = bHost
+        bannerHeight = bHeight
     }
 
     private func syncPagesBar() {
@@ -299,11 +336,35 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
         } else {
             pagesHeight?.constant = 0
         }
+        syncTopBanner()
+    }
+
+    private func syncTopBanner() {
+        let makers = liveModel.activeTileMakers()
+        let dismissed = UserDefaults.standard.bool(forKey: QuickTileStore.dismissedExploreKey)
+        let showExplore = makers.isEmpty
+            && !inSheet
+            && !isEditing
+            && !seeding
+            && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && QuickTileStore.isUneditedStarter(list)
+            && !dismissed
+        bannerModel.makers = makers
+        bannerModel.showExplore = showExplore
+        let visible = !makers.isEmpty || showExplore
+        bannerHost?.view.isHidden = !visible
+        if visible {
+            let fitted = bannerHost?.sizeThatFits(in: CGSize(width: max(320, view.bounds.width), height: .greatestFiniteMagnitude)).height ?? 56
+            bannerHeight?.constant = max(48, fitted)
+        } else {
+            bannerHeight?.constant = 0
+        }
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         if list.hasMultiplePages { syncPagesBar() }
+        else { syncTopBanner() }
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -469,9 +530,9 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
                                      text: "Add actions, live widgets, Dashboard tiles, and pages.")
         if traitCollection.preferredContentSizeCategory.isAccessibilityCategory { empty.image = nil }
         var button = UIButton.Configuration.hqMacPush(or: .hqFilled(), capsule: true)
-        button.title = "Add Action"
+        button.title = "Add to Favorites"
         empty.button = button
-        empty.buttonProperties.primaryAction = UIAction { [weak self] _ in self?.showAdd() }
+        empty.buttonProperties.primaryAction = UIAction { [weak self] _ in self?.showGallery() }
         contentUnavailableConfiguration = empty
     }
 
@@ -483,13 +544,16 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
             guard let self else { return }
             self.toggleSearch(!self.searching)
         }
+        let customTile = UIAction(title: "Build Custom Tile…", image: UIImage(systemName: "sparkles")) { [weak self] _ in
+            self?.createCustomTile()
+        }
         let addSection = UIAction(title: "Add Section Header", image: UIImage(systemName: "line.3.horizontal")) { [weak self] _ in
             self?.promptNewSection()
         }
         let newPage = UIAction(title: "New Page…", image: UIImage(systemName: "rectangle.stack.badge.plus")) { [weak self] _ in
             self?.promptNewPage()
         }
-        let presets = UIAction(title: "Starter Presets…", image: UIImage(systemName: "sparkles.rectangle.stack")) { [weak self] _ in
+        let presets = UIAction(title: "Starter Layouts…", image: UIImage(systemName: "sparkles.rectangle.stack")) { [weak self] _ in
             self?.showPresets()
         }
         let hidesOther = QuickTileStore.hidesOtherGateways()
@@ -503,7 +567,7 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
             Task { await self?.liveModel.refreshAll(); self?.reload() }
         }
         return UIMenu(children: [
-            UIMenu(options: .displayInline, children: [addSection, newPage, presets]),
+            UIMenu(options: .displayInline, children: [customTile, presets, newPage, addSection]),
             UIMenu(options: .displayInline, children: [searchAction, gwFilter, refresh]),
         ])
     }
@@ -902,7 +966,9 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
         }
 
         cell.accessibilityIdentifier = "quick-tile-\(tile.id)"
-        cell.isAccessibilityElement = !(kind?.isLiveCard == true && !isEditing && (kind == .tasks || kind == .goal || kind == .needsYou || kind == .botCard || kind == .jobCard))
+        let hasInlineControls = kind == .tasks || kind == .goal || kind == .needsYou || kind == .botCard || kind == .jobCard
+            || kind == .approvals || kind == .activeRuns || kind == .inlineAsk || kind == .livePeek
+        cell.isAccessibilityElement = !(kind?.isLiveCard == true && !isEditing && hasInlineControls)
         cell.accessibilityLabel = isPicture(tile) ? "\(name), Dashboard tile" : "\(tile.name), \(subtitle)"
         cell.accessibilityValue = missing == nil ? dashboardHealthWords(tile) : "Unavailable"
         cell.accessibilityTraits = .button
@@ -936,6 +1002,7 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
     private func configureLiveCard(_ cell: QuickTileCell, _ tile: QuickTile, kind: QuickTileKind, missing: Bool) {
         let size = tile.effectiveSize
         let model = liveModel
+        let hasTodayTasksCard = displayedTiles().contains { $0.known == .tasks && ($0.taskView ?? "today") == "today" }
         cell.contentConfiguration = UIHostingConfiguration {
             switch kind {
             case .tasks:
@@ -945,10 +1012,22 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
             case .goal:
                 FavoriteGoalCard(tile: tile, model: model, size: size, dimmed: missing)
             case .needsYou:
-                FavoriteNeedsYouCard(tile: tile, model: model, size: size) { [weak self] item in
-                    guard let self, !self.isEditing else { return }
-                    QuickActionsRouter.runAttention(item, from: self) { [weak self] said in self?.say(said) }
-                }
+                FavoriteNeedsYouCard(
+                    tile: tile,
+                    model: model,
+                    size: size,
+                    hasTodayTasksCard: hasTodayTasksCard,
+                    onSelect: { [weak self] item in
+                        guard let self, !self.isEditing else { return }
+                        QuickActionsRouter.runAttention(item, from: self) { [weak self] said in self?.say(said) }
+                    },
+                    onRetryJob: { [weak self] key, name in
+                        guard let self, !self.isEditing else { return }
+                        QuickActionsRouter.runJobDirectly(key: key, name: name, tileId: tile.id, live: self.liveModel) { [weak self] said in
+                            self?.say(said)
+                        }
+                    }
+                )
             case .botCard:
                 FavoriteBotCard(tile: tile, model: model, size: size, dimmed: missing,
                                 onMemo: { [weak self] in self?.runBotQuick(tile.bot, kind: .memo) },
@@ -971,6 +1050,35 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
                 FavoriteGatewayStatusCard(tile: tile, model: model, size: size)
             case .usage:
                 FavoriteUsageCard(tile: tile, model: model, size: size)
+            case .approvals:
+                FavoriteApprovalsCard(tile: tile, model: model, size: size) { [weak self] profile in
+                    guard let self, !self.isEditing else { return }
+                    QuickActionsRouter.openBotChat(profile: profile, from: self)
+                }
+            case .activeRuns:
+                FavoriteActiveRunsCard(tile: tile, model: model, size: size) { [weak self] profile in
+                    guard let self, !self.isEditing else { return }
+                    QuickActionsRouter.openBotChat(profile: profile, from: self)
+                }
+            case .inlineAsk:
+                FavoriteInlineAskCard(tile: tile, model: model, size: size, dimmed: missing) { [weak self] profile in
+                    guard let self, !self.isEditing else { return }
+                    QuickActionsRouter.openBotChat(profile: profile, from: self)
+                }
+            case .livePeek:
+                FavoriteLivePeekCard(
+                    tile: tile,
+                    model: model,
+                    size: size,
+                    onOpenBrowser: { [weak self] profile in
+                        guard let self, !self.isEditing else { return }
+                        QuickActionsRouter.openBrowser(profile: profile, from: self)
+                    },
+                    onOpenScreen: { [weak self] profile in
+                        guard let self, !self.isEditing else { return }
+                        QuickActionsRouter.openScreen(profile: profile, from: self)
+                    }
+                )
             default:
                 EmptyView()
             }
@@ -1338,7 +1446,92 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
         return IndexPath(item: min(proposedIndexPath.item, max(0, count - 1)), section: proposedIndexPath.section)
     }
 
-    // MARK: Add and Set Up
+    // MARK: Add, Gallery, Custom Tile, and Set Up
+
+    func showGallery() {
+        let source = FavoriteTiles.store().map(FavoriteTiles.init)
+        let tiles = source.map { QuickActionChoice.dashboardTiles($0.shown, names: $0.names, on: list) } ?? []
+        let targetPageId = currentPageId
+        let gallery = FavoriteGallerySheet.make(
+            liveModel: liveModel,
+            pageId: targetPageId,
+            choices: { [weak self] in self?.pageChoices() ?? [] },
+            tiles: tiles,
+            source: source,
+            onAddTile: { [weak self] tile in
+                var stamped = tile
+                if targetPageId != FavoritePage.mainId { stamped.pageId = targetPageId }
+                self?.change { $0.add(stamped) }
+                HQAnnounce.say("Added \(stamped.name)")
+            },
+            onApplyPreset: { [weak self] presetTiles, replace in
+                guard let self else { return }
+                self.change { list in
+                    if replace {
+                        list.tiles.removeAll { $0.resolvedPageId == targetPageId }
+                    }
+                    for tile in presetTiles { list.add(tile) }
+                }
+                self.say(.done("Added layout"))
+            },
+            onCreateCustomTile: { [weak self] in
+                self?.createCustomTile()
+            }
+        )
+        present(gallery, animated: true)
+    }
+
+    func createCustomTile() {
+        guard let services = MainTabController.current?.pages?.services,
+              let store = FavoriteTiles.store() else {
+            say(.failed("Sign in to build a custom tile."))
+            return
+        }
+        PagesHaptics.selection()
+        let pins = ArtifactPins.of(accountId: store.account.id)
+        let targetPageId = currentPageId
+        let sheet = NewTileSheet.make(
+            services: services,
+            bot: services.bots.first?.id,
+            pages: pins.pages,
+            currentPage: pins.currentPage
+        ) { [weak self] req in
+            guard let self else { return }
+            let chat = services.tileChat(for: req.bot)
+            let favSize: QuickTileSize = switch req.size {
+            case .small: .small
+            case .medium: .wide
+            case .tall: .tallCard
+            case .banner: .banner
+            case .large: .large
+            case .extraLarge: .extraLarge
+            }
+            TileMaker.start(
+                bot: req.bot,
+                what: req.what,
+                size: req.size == .small ? nil : req.size,
+                schedule: req.schedule,
+                dashboardPage: req.pageId,
+                accountId: store.account.id,
+                chat: chat,
+                from: self
+            ) { [weak self] pinId, name in
+                guard let self else { return }
+                var tile = QuickTile(kind: .dashboardTile, name: name, size: favSize)
+                tile.pin = pinId
+                tile.pinName = name
+                if targetPageId != FavoritePage.mainId { tile.pageId = targetPageId }
+                self.change { list in
+                    if !list.tiles.contains(where: { $0.known == .dashboardTile && $0.pin == pinId }) {
+                        list.add(tile)
+                    }
+                }
+                self.say(.done("Added “\(name)” to Favorites"))
+            }
+            self.syncTopBanner()
+        }
+        present(sheet, animated: true)
+    }
 
     func showAdd() {
         let source = FavoriteTiles.store().map(FavoriteTiles.init)
@@ -1492,5 +1685,105 @@ final class QuickTileCell: UICollectionViewCell {
         if !badge.isHidden, badge.frame.insetBy(dx: -8, dy: -8).contains(point) { return true }
         if !resize.isHidden, resize.frame.insetBy(dx: -8, dy: -8).contains(point) { return true }
         return super.point(inside: point, with: event)
+    }
+}
+
+@MainActor @Observable
+private final class FavoriteTopBannerModel {
+    var makers: [TileMaker] = []
+    var showExplore = false
+}
+
+private struct FavoriteTopBannerView: View {
+    var model: FavoriteTopBannerModel
+    var onExplore: () -> Void
+    var onDismissExplore: () -> Void
+    var onOpenMaker: (String) -> Void
+
+    var body: some View {
+        let _ = Theme.touch()
+        Group {
+            if let maker = model.makers.first {
+                Button { onOpenMaker(maker.bot.id) } label: {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Building “\(maker.what)”")
+                                .font(Font.hq(.footnote).weight(.semibold))
+                                .foregroundStyle(Color.hqLabel)
+                                .lineLimit(1)
+                            Text("\(maker.bot.name) · \(maker.stepWords)")
+                                .font(Font.hq(.caption2))
+                                .foregroundStyle(Color.hqLabel2)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.right")
+                            .font(Font.hq(.caption2).weight(.semibold))
+                            .foregroundStyle(Color.hqLabel3)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color(uiColor: HQPalette.card))
+                            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.hqTint.opacity(0.25), lineWidth: 1))
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 2)
+                .accessibilityIdentifier("favorites.banner.tilemaker")
+            } else if model.showExplore {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkles")
+                        .font(Font.hq(.subheadline).weight(.semibold))
+                        .foregroundStyle(Color.hqTint)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Make Favorites yours")
+                            .font(Font.hq(.footnote).weight(.semibold))
+                            .foregroundStyle(Color.hqLabel)
+                            .lineLimit(1)
+                        Text("Live cards, layouts & custom tiles")
+                            .font(Font.hq(.caption2))
+                            .foregroundStyle(Color.hqLabel2)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Button { onExplore() } label: {
+                        Text("Explore")
+                            .font(Font.hq(.caption).weight(.semibold))
+                            .foregroundStyle(Color.hqOnTint)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(Color.hqTint))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("favorites.banner.explore")
+                    Button { onDismissExplore() } label: {
+                        Image(systemName: "xmark")
+                            .font(Font.hq(.caption2).weight(.semibold))
+                            .foregroundStyle(Color.hqLabel3)
+                            .padding(6)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss Explore Banner")
+                    .accessibilityIdentifier("favorites.banner.dismiss")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color(uiColor: HQPalette.card))
+                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.hqStroke, lineWidth: 1))
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 2)
+            }
+        }
     }
 }

@@ -40,6 +40,47 @@ final class FavoritesLiveModel {
         var text: String
     }
 
+    /// Live state of an Inline Ask card (user types directly on Favorites and reads the answer in place).
+    struct InlineAskState: Equatable {
+        var prompt: String
+        var reply: String? = nil
+        var sending: Bool = false
+        var error: String? = nil
+    }
+
+    /// Live running bot, session, or subagent surfaced by the "Active Now" card.
+    struct ActiveRunItem: Identifiable, Hashable {
+        var id: String
+        var profile: String
+        var head: JSONValue?
+        var title: String
+        var detail: String
+        var isSubagent: Bool
+    }
+
+    /// Open tool approval or clarify question surfaced by the "Approvals" card.
+    struct ApprovalItem: Identifiable {
+        var id: String
+        var profile: String?
+        var botName: String
+        var head: JSONValue?
+        var title: String
+        var detail: String
+        var isApproval: Bool
+        var allowSession: Bool
+        var answering: Bool
+    }
+
+    /// Bot currently using its Browser or Screen surfaced by the "Browser & Screen" card.
+    struct LivePeekItem: Identifiable {
+        var id: String
+        var profile: String
+        var botName: String
+        var head: JSONValue?
+        var browserLine: String?
+        var usingComputer: Bool
+    }
+
     /// Incremented whenever any observed store notifies, so SwiftUI cards stay current without redundant work.
     private(set) var tick = 0
     /// Tasks currently being ticked off inline (optimistic strikethrough while saving).
@@ -48,6 +89,10 @@ final class FavoritesLiveModel {
     private(set) var runningTiles: Set<String> = []
     /// Recent background action result per tile id (cleared automatically after a few seconds).
     private(set) var feedbackByTile: [String: ActionFeedback] = [:]
+    /// Live reply state per Inline Ask card.
+    private(set) var inlineAskByTile: [String: InlineAskState] = [:]
+    /// Approvals currently being answered inline.
+    private(set) var answeringApprovals: Set<String> = []
 
     // Lazy remote snapshots (only loaded when a visible tile asks for them)
     private(set) var gatewayStatus: GatewayStatusReport?
@@ -55,6 +100,12 @@ final class FavoritesLiveModel {
     private(set) var usageByDays: [Int: UsageReport] = [:]
     private(set) var usageLoadingDays: Set<Int> = []
     private(set) var activeSubagents: Int?
+    private(set) var activeSubagentItems: [ActiveRunItem] = []
+
+    var isGatewayOnline: Bool {
+        _ = tick
+        return MorePages.context?.isOnline ?? false
+    }
 
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored private var visible = false
@@ -169,6 +220,148 @@ final class FavoritesLiveModel {
         bump()
     }
 
+    // MARK: Inline Ask & Approvals
+
+    func sendInlineAsk(tileId: String, profile: String, botName: String, prompt: String) {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, inlineAskByTile[tileId]?.sending != true else { return }
+        PagesHaptics.selection()
+        inlineAskByTile[tileId] = InlineAskState(prompt: trimmed, reply: nil, sending: true, error: nil)
+        bump()
+        let time = BackgroundTime.begin("hq.quick-actions.inline-ask")
+        Task { [weak self] in
+            let sent = await Result.of { try await AskBotIntent.send(profile: profile, name: botName, message: trimmed, wait: true) }
+            time.end()
+            guard let self else { return }
+            switch sent {
+            case .success(let (_, result)):
+                PagesHaptics.success()
+                switch result.reply {
+                case .text(let text):
+                    let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.inlineAskByTile[tileId] = InlineAskState(
+                        prompt: trimmed,
+                        reply: cleaned.isEmpty ? "Finished without a written reply." : cleaned,
+                        sending: false,
+                        error: nil
+                    )
+                case .asking:
+                    self.inlineAskByTile[tileId] = InlineAskState(prompt: trimmed, reply: "Waiting on your answer in chat.", sending: false, error: nil)
+                case .stillWorking:
+                    self.inlineAskByTile[tileId] = InlineAskState(prompt: trimmed, reply: "Still working — open chat to watch live.", sending: false, error: nil)
+                case .failed(let msg):
+                    self.inlineAskByTile[tileId] = InlineAskState(prompt: trimmed, reply: nil, sending: false, error: msg.isEmpty ? "Couldn’t finish replying." : msg)
+                case nil:
+                    self.inlineAskByTile[tileId] = InlineAskState(prompt: trimmed, reply: "Sent to \(botName).", sending: false, error: nil)
+                }
+            case .failure(let error):
+                PagesHaptics.error()
+                let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                self.inlineAskByTile[tileId] = InlineAskState(prompt: trimmed, reply: nil, sending: false, error: msg)
+            }
+            self.bump()
+        }
+    }
+
+    func clearInlineAsk(tileId: String) {
+        inlineAskByTile[tileId] = nil
+        bump()
+    }
+
+    func openApprovals() -> [ApprovalItem] {
+        _ = tick
+        guard let center = (MainTabController.current?.services as? AppModel)?.serverRequests else { return [] }
+        return center.allOpenPrompts().compactMap { summary in
+            let b = summary.profile.flatMap { bot($0) }
+            let name = b?.name ?? summary.profile.map { botName($0) } ?? "Hermes"
+            if let approval = summary.approval {
+                let text = approval.showsDescription && !approval.description.isEmpty ? approval.description : approval.command
+                return ApprovalItem(
+                    id: approval.id,
+                    profile: summary.profile,
+                    botName: name,
+                    head: b?.head,
+                    title: text.isEmpty ? "Approval needed" : text,
+                    detail: name,
+                    isApproval: true,
+                    allowSession: approval.allowSession,
+                    answering: answeringApprovals.contains(approval.id) || approval.answering != nil
+                )
+            }
+            if let clarify = summary.clarify {
+                let firstQ = clarify.questions.first?.question ?? "Waiting for your answer"
+                return ApprovalItem(
+                    id: clarify.id,
+                    profile: summary.profile,
+                    botName: name,
+                    head: b?.head,
+                    title: firstQ,
+                    detail: clarify.questions.count > 1 ? "\(name) · \(clarify.questions.count) questions" : name,
+                    isApproval: false,
+                    allowSession: false,
+                    answering: clarify.sending
+                )
+            }
+            return nil
+        }
+    }
+
+    func answerApproval(_ id: String, choice: ApprovalChoice) {
+        guard let center = (MainTabController.current?.services as? AppModel)?.serverRequests,
+              !answeringApprovals.contains(id) else { return }
+        PagesHaptics.selection()
+        answeringApprovals.insert(id)
+        bump()
+        Task { [weak self] in
+            let res = await Result.of { try await center.answerApproval(id, choice) }
+            if case .success = res { PagesHaptics.success() } else { PagesHaptics.error() }
+            guard let self else { return }
+            self.answeringApprovals.remove(id)
+            self.bump()
+        }
+    }
+
+    func activeRunItems() -> [ActiveRunItem] {
+        _ = tick
+        var out: [ActiveRunItem] = []
+        var seenProfiles: Set<String> = []
+        for bot in bots where !bot.hidden && bot.isWorking {
+            seenProfiles.insert(bot.id)
+            let detail = bot.step.map(LiveSteps.line) ?? "Working…"
+            out.append(ActiveRunItem(id: "bot:\(bot.id)", profile: bot.id, head: bot.head,
+                                     title: bot.name, detail: detail, isSubagent: false))
+        }
+        for session in sessions where session.isRunning && !seenProfiles.contains(session.profile) {
+            let b = bot(session.profile)
+            let detail = session.step.map(LiveSteps.line) ?? "Running…"
+            out.append(ActiveRunItem(id: "sess:\(session.id)", profile: session.profile, head: b?.head,
+                                     title: SessionRowView.title(session), detail: detail, isSubagent: false))
+        }
+        out.append(contentsOf: activeSubagentItems)
+        return out
+    }
+
+    func livePeekItems() -> [LivePeekItem] {
+        _ = tick
+        return bots.compactMap { bot in
+            guard !bot.hidden, let presence = bot.presence, !presence.isEmpty else { return nil }
+            return LivePeekItem(
+                id: bot.id,
+                profile: bot.id,
+                botName: bot.name,
+                head: bot.head,
+                browserLine: presence.browserLine,
+                usingComputer: presence.usingComputer
+            )
+        }
+    }
+
+    func activeTileMakers() -> [TileMaker] {
+        _ = tick
+        guard let accountId = MorePages.context?.account.id, !accountId.isEmpty else { return [] }
+        return TileMaker.makers(accountId: accountId)
+    }
+
     // MARK: Inline Task & Goal Check-off
 
     func toggleTaskDone(_ taskId: String) {
@@ -275,7 +468,7 @@ final class FavoritesLiveModel {
     }
 
     /// Upcoming / running jobs overview when `.jobCard` has no specific job chosen.
-    func upcomingJobs(limit: Int = 5) -> [(job: CronJob, title: String, running: Bool, failed: Bool)] {
+    func upcomingJobs(limit: Int = 5) -> [(job: CronJob, title: String, running: Bool, failed: Bool, overdue: Bool, reason: String?)] {
         _ = tick
         guard let store = MainTabController.current?.pages?.jobsStore else { return [] }
         let now = Date()
@@ -287,14 +480,20 @@ final class FavoritesLiveModel {
             let fa = JobWords.lastRunFailed(a)
             let fb = JobWords.lastRunFailed(b)
             if fa != fb { return fa }
+            let oa = JobWords.nextRunOverdue(a, now: now) != nil
+            let ob = JobWords.nextRunOverdue(b, now: now) != nil
+            if oa != ob { return oa }
             let da = PagesDate.parse(a.nextRunAt) ?? .distantFuture
             let db = PagesDate.parse(b.nextRunAt) ?? .distantFuture
             return da < db
         }
         return sorted.prefix(limit).map { job in
             let running = store.runInFlight.contains(job.key) || store.stillRunning[job.key] != nil || JobWords.isRunning(job)
-            let failed = JobWords.lastRunFailed(job) || JobWords.nextRunOverdue(job, now: now) != nil
-            return (job, store.title(job), running, failed)
+            let failed = JobWords.lastRunFailed(job)
+            let overdueNote = JobWords.nextRunOverdue(job, now: now)
+            let overdue = !failed && overdueNote != nil
+            let reason: String? = failed ? "Last run failed" : (overdueNote != nil ? "Overdue" : nil)
+            return (job, store.title(job), running, failed, overdue, reason)
         }
     }
 
@@ -328,13 +527,29 @@ final class FavoritesLiveModel {
     }
 
     /// Dynamic "Needs You / Active Now" prioritized attention list.
-    func attentionItems() -> [AttentionItem] {
+    /// When a `Today` Tasks card is also visible on the same page, non-input ready tasks are deprioritized below
+    /// approvals, questions, and failed jobs so both cards don't repeat the same top 3 rows.
+    func attentionItems(hasTodayTasksCard: Bool = false) -> [AttentionItem] {
         _ = tick
         var items: [AttentionItem] = []
 
-        // 1. Bots needing input or attention
+        // 1. Live server approvals & clarify questions
+        for prompt in openApprovals() {
+            items.append(AttentionItem(
+                id: "prompt:\(prompt.id)",
+                kind: .botInput(profile: prompt.profile ?? "default"),
+                title: prompt.isApproval ? "Approve: \(prompt.title)" : prompt.title,
+                detail: prompt.isApproval ? "\(prompt.botName) needs approval" : "\(prompt.botName) is asking",
+                symbol: prompt.isApproval ? "checkmark.shield.fill" : "questionmark.bubble.fill",
+                urgent: true,
+                profile: prompt.profile,
+                head: prompt.head
+            ))
+        }
+
+        // 2. Bots needing input or attention
         for bot in bots where !bot.hidden {
-            if let input = bot.needsInput {
+            if let input = bot.needsInput, !items.contains(where: { $0.profile == bot.id }) {
                 items.append(AttentionItem(
                     id: "bot-input:\(bot.id)",
                     kind: .botInput(profile: bot.id),
@@ -359,24 +574,7 @@ final class FavoritesLiveModel {
             }
         }
 
-        // 2. Tasks waiting on you (ready / needs_you)
-        if let store = TasksHub.current, !TasksHub.isOff(store.account) {
-            store.prepare()
-            for task in store.tasks where !task.isDone && TodoViews.waitsOnYou(task) {
-                let note = task.statusNote.trimmingCharacters(in: .whitespacesAndNewlines)
-                items.append(AttentionItem(
-                    id: "task:\(task.id)",
-                    kind: .taskWaiting(id: task.id),
-                    title: task.title.isEmpty ? "Untitled Task" : task.title,
-                    detail: note.isEmpty ? (task.status == "needs_you" ? "Needs your reply" : "Ready for you") : note,
-                    symbol: "checklist",
-                    urgent: true,
-                    profile: task.helper
-                ))
-            }
-        }
-
-        // 3. Jobs needing attention
+        // 3. Jobs needing attention (failed or overdue)
         if let store = MainTabController.current?.pages?.jobsStore {
             let now = Date()
             for job in store.jobs where JobWords.section(job, now: now) == .needsAttention {
@@ -392,7 +590,33 @@ final class FavoritesLiveModel {
             }
         }
 
-        // 4. Bots actively working right now (informational, non-urgent)
+        // 4. Tasks waiting on you (if a Today card is also shown on this page, avoid duplicating tasks already due today
+        // unless they explicitly need your reply or there are no other attention items).
+        if let store = TasksHub.current, !TasksHub.isOff(store.account) {
+            store.prepare()
+            let todayIds: Set<String> = hasTodayTasksCard
+                ? Set(TodoViews.groups(store.tasks, view: .today, sections: store.sections, bots: bots.map(\.id),
+                                       now: Date(), sort: store.settings.sort, paused: GoalViews.paused(store.goals))
+                    .flatMap(\.tasks).map(\.id))
+                : []
+            for task in store.tasks where !task.isDone && TodoViews.waitsOnYou(task) {
+                if hasTodayTasksCard && todayIds.contains(task.id) && task.status != "needs_you" { continue }
+                let note = task.statusNote.trimmingCharacters(in: .whitespacesAndNewlines)
+                let helperBot = task.helper.flatMap { bot($0) }
+                items.append(AttentionItem(
+                    id: "task:\(task.id)",
+                    kind: .taskWaiting(id: task.id),
+                    title: task.title.isEmpty ? "Untitled Task" : task.title,
+                    detail: note.isEmpty ? (task.status == "needs_you" ? "Needs your reply" : "Ready for you") : note,
+                    symbol: "checklist",
+                    urgent: task.status == "needs_you",
+                    profile: task.helper,
+                    head: helperBot?.head
+                ))
+            }
+        }
+
+        // 5. Bots actively working right now (informational, non-urgent)
         for bot in bots where !bot.hidden && bot.isWorking && bot.needsInput == nil && bot.attention == nil {
             let detail = bot.step.map(LiveSteps.line) ?? "Working…"
             items.append(AttentionItem(
@@ -460,6 +684,7 @@ final class FavoritesLiveModel {
         let names: [Notification.Name] = [
             SessionStrip.listChanged,
             ServerIssues.didChange,
+            TileMaker.changed,
             UIApplication.didBecomeActiveNotification,
         ]
         observers = names.map { name in
@@ -573,11 +798,11 @@ final class FavoritesLiveModel {
                 if store.board == nil || force { store.refreshAll(force: force) }
             }
         }
-        if kinds.contains(.gatewayStatus) || kinds.contains(.needsYou) {
-            Task {
-                await loadStatus(force: force)
-                await loadSubagents(force: force)
-            }
+        if kinds.contains(.gatewayStatus) {
+            Task { await loadStatus(force: force) }
+        }
+        if kinds.contains(.gatewayStatus) || kinds.contains(.activeRuns) {
+            Task { await loadSubagents(force: force) }
         }
         let usageDays = Set(observedTiles.filter { $0.known == .usage }.map { $0.days ?? 7 })
         for days in usageDays {
@@ -589,14 +814,17 @@ final class FavoritesLiveModel {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                await PowerPolls.wait(.seconds(20), floor: .zero)
+                await PowerPolls.wait(.seconds(30), floor: .zero)
                 guard !Task.isCancelled, let self, self.visible else { return }
                 let kinds = Set(self.observedTiles.compactMap(\.known))
-                if kinds.contains(.gatewayStatus) || kinds.contains(.needsYou) {
+                if kinds.contains(.gatewayStatus) {
                     await self.loadStatus(force: false)
+                }
+                if kinds.contains(.gatewayStatus) || kinds.contains(.activeRuns) {
                     await self.loadSubagents(force: false)
                 }
-                if kinds.contains(.botCard) || kinds.contains(.groupChat) || kinds.contains(.chatSession) || kinds.contains(.needsYou) {
+                if kinds.contains(.botCard) || kinds.contains(.groupChat) || kinds.contains(.chatSession)
+                    || kinds.contains(.needsYou) || kinds.contains(.approvals) || kinds.contains(.activeRuns) || kinds.contains(.livePeek) {
                     self.bump()
                 }
             }
@@ -637,21 +865,43 @@ final class FavoritesLiveModel {
 
     private func loadSubagents(force: Bool) async {
         guard let context = MorePages.context else { return }
-        if !force, let last = lastSpawnAt, Date().timeIntervalSince(last) < 15 { return }
+        if !force, let last = lastSpawnAt, Date().timeIntervalSince(last) < 30 { return }
         let api = SpawnTreeAPI(client: context.client)
         var profiles = context.botChoices.map(\.id)
         if profiles.isEmpty { profiles = ["default"] }
         var total = 0
-        await withChildTasks(of: Int.self) { group in
+        var rows: [ActiveRunItem] = []
+        await withChildTasks(of: (String, [SpawnRecord]).self) { group in
             for profile in profiles {
                 group.addTask {
                     let result = try? await api.status(profile: profile)
-                    return result?.active.count { $0.status == .running } ?? 0
+                    let active = result?.active.filter { $0.status == .running } ?? []
+                    return (profile, active)
                 }
             }
-            while let count = await group.next() { total += count }
+            while let (profile, active) = await group.next() {
+                total += active.count
+                let b = bot(profile)
+                for run in active {
+                    let goal = (run.goal ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let title = goal.isEmpty ? "Helper (\(botName(profile)))" : goal
+                    let detail: String = {
+                        if let count = run.toolCount, count > 0 { return "\(botName(profile)) · \(count) \(count == 1 ? "step" : "steps")" }
+                        return "\(botName(profile)) helper"
+                    }()
+                    rows.append(ActiveRunItem(
+                        id: "sub:\(profile):\(run.id)",
+                        profile: profile,
+                        head: b?.head,
+                        title: title,
+                        detail: detail,
+                        isSubagent: true
+                    ))
+                }
+            }
         }
         activeSubagents = total
+        activeSubagentItems = rows
         lastSpawnAt = Date()
         bump()
     }

@@ -552,10 +552,12 @@ final class TileMaker {
     @discardableResult
     static func start(bot: Bot, what: String, size: PinTileSize? = nil, schedule: TileScheduleChoice = .auto,
                       dashboardPage: String? = nil, accountId: String, chat: any ChatSessionModel,
-                      from page: UIViewController) -> TileMaker {
+                      from page: UIViewController,
+                      onPinned: ((_ pinId: String, _ name: String) -> Void)? = nil) -> TileMaker {
         let maker = TileMaker(chat: chat, bot: bot, accountId: accountId, page: page,
                               dashboardPage: dashboardPage, desiredSize: size)
         maker.scheduleChoice = schedule
+        maker.onPinned = onPinned
         active.append(maker)
         maker.begin(what)
         return maker
@@ -613,6 +615,8 @@ final class TileMaker {
     private var path = ""
     /// [tile-versions] The whole prompt of a hidden turn that isn't a button's (the roll back's).
     private var rawPrompt: String?
+    /// [quick-actions] Optional callback invoked when a new tile is pinned so Favorites can add it automatically.
+    private var onPinned: ((_ pinId: String, _ name: String) -> Void)?
 
     private func begin(_ what: String) {
         self.what = what
@@ -784,9 +788,12 @@ final class TileMaker {
         // [tile-versions] A new tile's page is its Version 1.
         TileVersions.shared.keepSoon(pinId: pinId, accountId: context.accountId,
                                      kind: .made, what: what)
+        onPinned?(pinId, pins.name(ArtifactPin.standIn(id: pinId, name: name)))
         Haptics.play(.success)
         AppLog.note("pages", "new tile from \(AppLog.tag(bot.id)) pinned")
-        if let page, page.viewIfLoaded?.window != nil { PagesHUD.show("Your New Tile Is Pinned", symbol: "pin.fill", from: page) }
+        if let page, page.viewIfLoaded?.window != nil {
+            PagesHUD.show(onPinned != nil ? "Tile Added to Favorites" : "Your New Tile Is Pinned", symbol: onPinned != nil ? "star.fill" : "pin.fill", from: page)
+        }
     }
 
     /// A problem's first line, ending in a full stop (the alert's words go on after it).

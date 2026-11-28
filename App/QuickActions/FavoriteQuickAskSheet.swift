@@ -130,7 +130,8 @@ private struct FavoriteQuickAskView: View {
 enum FavoritePresetsSheet {
     static func make(pageId: String, onApply: @escaping ([QuickTile], Bool) -> Void) -> UINavigationController {
         let host = FavoritePresetsHost(pageId: pageId, onApply: onApply)
-        let nav = ChatSheet.wrap(host, title: "Starter Presets", detents: [.medium(), .large()])
+        let nav = ChatSheet.wrap(host, title: "Starter Layouts", detents: [.large()])
+        nav.sheetPresentationController?.selectedDetentIdentifier = .large
         nav.view.accessibilityIdentifier = "favorites.presets-sheet"
         return nav
     }
@@ -148,7 +149,7 @@ private final class FavoritePresetsHost: UIHostingController<HQScaledRoot<Favori
         }
         super.init(rootView: HQScaledRoot(view))
         weakSelf = self
-        title = "Starter Presets"
+        title = "Starter Layouts"
         navigationItem.largeTitleDisplayMode = .never
         let close = UIBarButtonItem.hqClose(.cancel, action: UIAction { [weak self] _ in self?.dismiss(animated: true) })
         navigationItem.hqPlaceFormClose(close)
@@ -159,14 +160,14 @@ private final class FavoritePresetsHost: UIHostingController<HQScaledRoot<Favori
 
 private struct FavoritePresetsView: View {
     var pick: (FavoritePreset, Bool) -> Void
-    @State private var replace = false
+    @State private var replace = true
 
     var body: some View {
         List {
             Section {
                 Toggle("Replace Current Page", isOn: $replace)
             } footer: {
-                Text(replace ? "Replaces the tiles on this Favorites page." : "Adds the preset’s tiles to the end of this page.")
+                Text(replace ? "Replaces the tiles on this Favorites page." : "Adds the layout’s tiles below your current ones.")
                     .font(Font.hq(.footnote))
                     .foregroundStyle(Color.hqLabel2)
             }
@@ -175,11 +176,12 @@ private struct FavoritePresetsView: View {
             Section {
                 ForEach(FavoritePreset.allCases) { preset in
                     Button { pick(preset, replace) } label: {
-                        HStack(spacing: 12) {
-                            QuickTileIcon(symbol: preset.symbol, color: HQPalette.tint, side: HQFont.scaled(32))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(preset.title).font(Font.hq(.body).weight(.semibold)).foregroundStyle(Color.hqLabel)
-                                Text(preset.subtitle).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+                        HStack(spacing: 14) {
+                            FavoritePresetThumbnail(preset: preset)
+                                .frame(width: 74, height: 84)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(preset.title).font(Font.hq(.headline)).foregroundStyle(Color.hqLabel)
+                                Text(preset.subtitle).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2).lineLimit(3)
                             }
                             Spacer(minLength: 4)
                             Image(systemName: "plus.circle.fill")
@@ -187,7 +189,7 @@ private struct FavoritePresetsView: View {
                                 .foregroundStyle(Color.hqTint)
                                 .accessibilityHidden(true)
                         }
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 6)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -197,5 +199,92 @@ private struct FavoritePresetsView: View {
             .hqSheetRows()
         }
         .hqGroupedPage()
+    }
+}
+
+/// Miniature Bento wireframe thumbnail showing the actual structure of a `FavoritePreset` before applying it.
+struct FavoritePresetThumbnail: View {
+    var preset: FavoritePreset
+
+    var body: some View {
+        VStack(spacing: 4) {
+            switch preset {
+            case .commandCenter:
+                // 4-up mini strip + Needs You + Today + Bot + 2-up Gateway/Usage
+                HStack(spacing: 3) {
+                    miniDot(Color.hqRed); miniDot(Color.hqGreen); miniDot(Color.hqTint); miniDot(Color(uiColor: QuickTileLook.color(.teal)))
+                }
+                wideBlock(accent: Color.hqOrange, height: 16)
+                wideBlock(accent: Color.hqTint, height: 16)
+                wideBlock(accent: Color.hqLabel3, height: 12)
+                HStack(spacing: 3) {
+                    smallBlock(accent: Color.hqGreen)
+                    smallBlock(accent: Color.hqTint)
+                }
+            case .dailyFocus:
+                // Large Today + Wide Goal + Wide Needs You + 2-up Actions
+                wideBlock(accent: Color.hqOrange, height: 28)
+                wideBlock(accent: Color.hqGreen, height: 16)
+                wideBlock(accent: Color.hqTint, height: 14)
+                HStack(spacing: 3) {
+                    smallBlock(accent: Color(uiColor: QuickTileLook.color(.teal)))
+                    smallBlock(accent: Color.hqRed)
+                }
+            case .voiceFirst:
+                // 2-up Memo/Talk + Wide Ask + Wide Chat + Wide Bot
+                HStack(spacing: 3) {
+                    smallBlock(accent: Color.hqRed)
+                    smallBlock(accent: Color.hqGreen)
+                }
+                wideBlock(accent: Color.hqTint, height: 16)
+                wideBlock(accent: Color(uiColor: QuickTileLook.color(.indigo)), height: 16)
+                wideBlock(accent: Color.hqLabel3, height: 16)
+            case .builderOps:
+                // 2-up Gateway/Usage + Wide Active + Wide Jobs + Wide Kanban
+                HStack(spacing: 3) {
+                    smallBlock(accent: Color.hqGreen)
+                    smallBlock(accent: Color.hqTint)
+                }
+                wideBlock(accent: Color.hqTint, height: 15)
+                wideBlock(accent: Color.hqOrange, height: 15)
+                wideBlock(accent: Color(uiColor: QuickTileLook.color(.yellow)), height: 16)
+            }
+        }
+        .padding(6)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.hqFill3)
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.hqStroke, lineWidth: 1))
+        )
+        .accessibilityHidden(true)
+    }
+
+    private func miniDot(_ color: Color) -> some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(color.opacity(0.85))
+            .frame(maxWidth: .infinity)
+            .frame(height: 11)
+    }
+
+    private func wideBlock(accent: Color, height: CGFloat) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(accent).frame(width: 5, height: 5)
+            RoundedRectangle(cornerRadius: 2).fill(Color.hqLabel3.opacity(0.45)).frame(height: 3)
+            Spacer(minLength: 4)
+        }
+        .padding(.horizontal, 5)
+        .frame(maxWidth: .infinity)
+        .frame(height: height)
+        .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color(uiColor: HQPalette.card)))
+    }
+
+    private func smallBlock(accent: Color) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Circle().fill(accent).frame(width: 5, height: 5)
+            RoundedRectangle(cornerRadius: 2).fill(Color.hqLabel3.opacity(0.45)).frame(height: 3)
+        }
+        .padding(4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color(uiColor: HQPalette.card)))
     }
 }

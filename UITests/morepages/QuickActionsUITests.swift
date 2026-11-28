@@ -352,4 +352,56 @@ final class QuickActionsUITests: MorePagesCase {
         tab("More")
         XCTAssertFalse(revealMore("favorites", timeout: 3).exists, "More has no Favorites row")
     }
+
+    /// Favorites 2.0: tapping `⋯` must never raise the software keyboard on iPhone; Starter Layouts opens large with
+    /// visual wireframe previews; nav bar `+` opens the visual Add to Favorites gallery with Build Custom Tile hero and
+    /// live widget previews; adding a live card automatically dismisses the unedited-starter Explore banner.
+    @MainActor func testQuickActions_GalleryPresetsAndMoreMenuNoKeyboard() throws {
+        launchSignedIn(["-HQDebugResetQuickActions", "YES", "-hqn.quickActions.dismissedExplore", "NO"])
+        tab("More")
+        openMore("quick-actions")
+        XCTAssertTrue(tile("starter-memo").waitForExistence(timeout: 10), "the starter set loads")
+
+        // Unedited starter shows the calm dismissible Explore banner without polluting `shownIDs`.
+        let exploreBtn = app.buttons["favorites.banner.explore"]
+        XCTAssertTrue(exploreBtn.waitForExistence(timeout: 5), "unedited starter shows Explore banner")
+        XCTAssertEqual(shownIDs, ["starter-memo", "starter-talk", "starter-new-chat", "starter-add-task", "starter-search"])
+        shot("favorites-v2-starter-banner")
+
+        // Tapping `⋯` opens Favorites Options menu WITHOUT popping up the software keyboard.
+        let moreBtn = app.buttons["quick-actions.more"]
+        XCTAssertTrue(moreBtn.waitForExistence(timeout: 5), "nav bar has ⋯ options button")
+        moreBtn.tap()
+        let layoutsItem = app.buttons["Starter Layouts…"]
+        XCTAssertTrue(layoutsItem.waitForExistence(timeout: 5), "⋯ menu lists Starter Layouts…")
+        XCTAssertTrue(app.buttons["Build Custom Tile…"].exists, "⋯ menu lists Build Custom Tile…")
+        XCTAssertEqual(app.keyboards.count, 0, "tapping ⋯ on iPhone must never raise the software keyboard")
+        shot("favorites-v2-more-menu")
+        layoutsItem.tap()
+
+        // Visual Starter Layouts sheet opens at large detent with all 4 presets.
+        XCTAssertTrue(app.navigationBars["Starter Layouts"].waitForExistence(timeout: 5), "Starter Layouts sheet opens")
+        for preset in ["commandCenter", "dailyFocus", "voiceFirst", "builderOps"] {
+            XCTAssertTrue(app.buttons["favorites.preset.\(preset)"].waitForExistence(timeout: 3), "preset \(preset) visible")
+        }
+        shot("favorites-v2-starter-layouts")
+        app.navigationBars["Starter Layouts"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Favorites"].waitForExistence(timeout: 5))
+
+        // Nav bar `+` opens the visual Add to Favorites Gallery.
+        let addBtn = app.buttons["quick-actions.add"]
+        XCTAssertTrue(addBtn.waitForExistence(timeout: 5), "nav bar has + button")
+        addBtn.tap()
+        XCTAssertTrue(app.navigationBars["Add to Favorites"].waitForExistence(timeout: 5), "+ opens Add to Favorites gallery")
+        XCTAssertTrue(app.buttons["favorites.gallery.create-custom-tile"].waitForExistence(timeout: 5), "hero Build Custom Tile CTA exists")
+        XCTAssertTrue(app.buttons["favorites.gallery.widget.needs-you"].waitForExistence(timeout: 5), "live widget carousel exists")
+        shot("favorites-v2-add-gallery")
+
+        // Tap a live widget preview -> Set Up -> Add -> returns to Favorites and auto-hides starter Explore banner.
+        app.buttons["favorites.gallery.widget.needs-you"].tap()
+        XCTAssertTrue(app.navigationBars["Set Up"].waitForExistence(timeout: 5), "tapping gallery preview opens Set Up")
+        app.buttons["quick.setup.save"].tap()
+        XCTAssertTrue(waitUntil(6) { self.shownIDs.count == 6 }, "added Needs You card from gallery")
+        XCTAssertTrue(waitUntil(4) { !exploreBtn.exists }, "Explore banner disappears automatically after customizing")
+    }
 }

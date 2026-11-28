@@ -42,6 +42,14 @@ nonisolated enum QuickTileKind: String, CaseIterable, Sendable {
     case gatewayStatus = "gateway-status"
     /// Live Usage tokens/cost + daily sparkline card.
     case usage
+    /// Live Approvals & Clarify Questions card with inline Allow / Deny & answer taps.
+    case approvals
+    /// Live Active Runs & Subagents (`SpawnTree`) ticker card.
+    case activeRuns = "active-runs"
+    /// Live Inline Ask card: type a prompt right on Favorites and stream the reply in place.
+    case inlineAsk = "inline-ask"
+    /// Live Watch Browser & Bot Screen peek card.
+    case livePeek = "live-peek"
 
     // Deeper destinations, smart actions, routines & organization
     /// Run a saved prompt from PromptLibrary against a bot.
@@ -65,7 +73,7 @@ nonisolated enum QuickTileKind: String, CaseIterable, Sendable {
     var staysOnPage: Bool { self == .runJob || self == .section }
 
     var needsBot: Bool {
-        [.newChat, .memo, .talk, .send, .openChat, .botCard, .prompt, .slashCommand, .quickAsk].contains(self)
+        [.newChat, .memo, .talk, .send, .openChat, .botCard, .prompt, .slashCommand, .quickAsk, .inlineAsk].contains(self)
     }
 
     /// [favorites-live-tiles] A picture, not an icon and words: Set Up has no icon grid, colour or Height, and it is
@@ -74,7 +82,8 @@ nonisolated enum QuickTileKind: String, CaseIterable, Sendable {
 
     /// Native live card rendered by `FavoriteLiveCards` (not a static icon square).
     var isLiveCard: Bool {
-        [.tasks, .goal, .needsYou, .botCard, .groupChat, .chatSession, .jobCard, .kanban, .gatewayStatus, .usage].contains(self)
+        [.tasks, .goal, .needsYou, .botCard, .groupChat, .chatSession, .jobCard, .kanban, .gatewayStatus, .usage,
+         .approvals, .activeRuns, .inlineAsk, .livePeek].contains(self)
     }
 
     /// Any rich visual widget (Dashboard tile or native live card).
@@ -123,6 +132,10 @@ nonisolated enum QuickTileKind: String, CaseIterable, Sendable {
         case .kanban: page.flatMap { $0.isEmpty ? nil : $0 } ?? "Kanban"
         case .gatewayStatus: "Gateway"
         case .usage: "Usage"
+        case .approvals: "Approvals"
+        case .activeRuns: "Active Now"
+        case .inlineAsk: bot.flatMap { $0.isEmpty ? nil : "Ask \($0)" } ?? "Inline Ask"
+        case .livePeek: "Browser & Screen"
         case .prompt: page.flatMap { $0.isEmpty ? nil : $0 } ?? "Saved Prompt"
         case .slashCommand: page.flatMap { $0.isEmpty ? nil : $0 } ?? "Command"
         case .quickAsk: bot.flatMap { $0.isEmpty ? nil : "Ask \($0)" } ?? "Quick Ask"
@@ -157,6 +170,10 @@ nonisolated enum QuickTileKind: String, CaseIterable, Sendable {
         case .kanban: ("rectangle.split.3x1.fill", .yellow)
         case .gatewayStatus: ("gauge.with.dots.needle.67percent", .gray)
         case .usage: ("chart.bar.fill", .accent)
+        case .approvals: ("checkmark.shield.fill", .orange)
+        case .activeRuns: ("bolt.horizontal.circle.fill", .accent)
+        case .inlineAsk: ("text.bubble.fill", .indigo)
+        case .livePeek: ("display", .teal)
         case .prompt: ("text.quote", .indigo)
         case .slashCommand: ("command", .pink)
         case .quickAsk: ("sparkles", .accent)
@@ -651,6 +668,10 @@ nonisolated struct QuickTile: Codable, Equatable, Identifiable, Sendable {
             return boardName ?? "board"
         case .gatewayStatus: return "status"
         case .usage: return "\(days ?? 7) days"
+        case .approvals: return "approvals"
+        case .activeRuns: return "running"
+        case .inlineAsk: return who.isEmpty ? "ask inline" : "ask \(who)"
+        case .livePeek: return "live view"
         case .prompt: return flag == true ? "with \(who)" : "asks \(who)"
         case .slashCommand:
             let cmd = command ?? "/command"
@@ -740,6 +761,10 @@ nonisolated enum QuickTileRoute: Equatable, Sendable {
     case kanban(board: String?, status: String?)
     case gatewayStatus
     case usage
+    case approvals
+    case activeRuns
+    case inlineAsk(profile: String)
+    case livePeek(profile: String?)
     case quickAsk(profile: String, defaultOpen: Bool)
     case slashCommand(profile: String, command: String)
     case dashboardPage(id: String)
@@ -751,7 +776,7 @@ nonisolated enum QuickTileRoute: Equatable, Sendable {
 
     var staysOnPage: Bool {
         switch self {
-        case .sendInBackground, .runJob, .unavailable, .toggleSection, .quickAsk: true
+        case .sendInBackground, .runJob, .unavailable, .toggleSection, .quickAsk, .inlineAsk: true
         case .routine(let steps, _):
             steps.allSatisfy { $0.knownKind?.isBackground == true }
         default: false
@@ -796,6 +821,10 @@ nonisolated enum QuickTileRoute: Equatable, Sendable {
         case .kanban: return .kanban(board: tile.boardSlug?.nilIfEmpty, status: tile.columnStatus?.nilIfEmpty)
         case .gatewayStatus: return .gatewayStatus
         case .usage: return .usage
+        case .approvals: return .approvals
+        case .activeRuns: return .activeRuns
+        case .inlineAsk: return .inlineAsk(profile: bot)
+        case .livePeek: return .livePeek(profile: tile.bot?.nilIfEmpty)
         case .dashboardPage: return .dashboardPage(id: tile.dashboardPageId?.nilIfEmpty ?? "main")
         case .filesFolder: return .filesFolder(profile: tile.bot?.nilIfEmpty, path: tile.folderPath ?? "")
         case .link:
@@ -893,7 +922,7 @@ nonisolated enum QuickTileRules {
             return true
         }
         if let kind = tile.known, kind.isSection || kind == .link || kind == .search || kind == .needsYou
-            || kind == .gatewayStatus || kind == .usage {
+            || kind == .gatewayStatus || kind == .usage || kind == .approvals || kind == .activeRuns || kind == .livePeek {
             return false
         }
         return missing(tile, world: world) != nil
@@ -1123,6 +1152,7 @@ nonisolated enum QuickTileStore {
     static let unreadableKey = "hqn.quickActions.unreadable"
     static let currentPageKey = "hqn.quickActions.currentPage"
     static let hideOtherGatewaysKey = "hqn.quickActions.hideOtherGateways"
+    static let dismissedExploreKey = "hqn.quickActions.dismissedExplore"
     static let didChange = Notification.Name("hqn.quickActions.changed")
     static let version = 1
     static let rowID = "quick-actions"
@@ -1262,7 +1292,7 @@ nonisolated enum FavoritePreset: String, CaseIterable, Identifiable, Sendable {
         case .commandCenter: "Needs You, Today’s tasks, live bot, quick strip, and status."
         case .dailyFocus: "Today’s tasks, active goal, quick capture, and voice."
         case .voiceFirst: "One-tap Memo, Talk, Quick Ask, and Add Task."
-        case .builderOps: "Gateway status, Usage, Kanban, Jobs, Terminal, and Changes."
+        case .builderOps: "Gateway, Usage, Active Now, Upcoming Jobs, and Kanban."
         }
     }
 
@@ -1362,11 +1392,12 @@ nonisolated enum FavoritePreset: String, CaseIterable, Identifiable, Sendable {
 
         case .builderOps:
             var out: [QuickTile] = [
-                stamp(QuickTile(kind: .gatewayStatus, name: "Gateway Status", size: .wide)),
+                stamp(QuickTile(kind: .gatewayStatus, name: "Gateway", size: .small)),
             ]
-            var usage = stamp(QuickTile(kind: .usage, name: "7-Day Usage", size: .wide))
+            var usage = stamp(QuickTile(kind: .usage, name: "Usage", size: .small))
             usage.days = 7
             out.append(usage)
+            out.append(stamp(QuickTile(kind: .activeRuns, name: "Active Now", size: .wide)))
             out.append(stamp(QuickTile(kind: .jobCard, name: "Upcoming Jobs", size: .wide)))
             out.append(stamp(QuickTile(kind: .kanban, name: "Kanban", size: .wide)))
             var terminal = stamp(QuickTile(kind: .page, name: "Terminal", symbol: "apple.terminal.fill", color: .gray, size: .small))
@@ -1473,9 +1504,39 @@ nonisolated enum QuickTileLayout {
         if kind.isLiveCard {
             let rows = CGFloat(size.rowSpan)
             let base = max(metrics.unitHeight, metrics.actionTallHeight)
+            // Single-control Wide/Banner cards (Inline Ask, Browser & Screen) sit extra snug (~108pt) with zero dead space.
+            if Self.usesTightWideHeight(tile) {
+                return min(base, ceil(108 * max(1, metrics.scale)))
+            }
+            // Wide/Banner 1-row horizontal cards (Bot, Goal, Approvals, single Job, Group, Session) use a tailored
+            // compact height (~134pt) instead of a tall square, eliminating dead empty space inside the card.
+            if Self.usesCompactWideHeight(tile) {
+                return min(base, ceil(max(metrics.actionTallHeight, 134 * max(1, metrics.scale))))
+            }
             return rows * base + (rows - 1) * metrics.gap
         }
         return tile.short ? metrics.actionShortHeight : metrics.actionTallHeight
+    }
+
+    /// Single-control 1-row Wide/Banner live cards (Inline Ask, Browser & Screen) that look best at ~108pt.
+    static func usesTightWideHeight(_ tile: QuickTile) -> Bool {
+        let size = tile.effectiveSize
+        guard size.isWideSpan, size.rowSpan == 1, let kind = tile.known else { return false }
+        return kind == .inlineAsk || kind == .livePeek
+    }
+
+    /// Horizontal 1-row Wide/Banner live cards whose content is 2–3 rows + action strip (snugger than a 180pt square).
+    static func usesCompactWideHeight(_ tile: QuickTile) -> Bool {
+        let size = tile.effectiveSize
+        guard size.isWideSpan, size.rowSpan == 1, let kind = tile.known else { return false }
+        switch kind {
+        case .botCard, .goal, .approvals, .groupChat, .chatSession, .inlineAsk, .livePeek:
+            return true
+        case .jobCard:
+            return !(tile.job ?? "").isEmpty
+        default:
+            return false
+        }
     }
 
     /// Computes frames for `tiles` (optionally including a trailing Small slot for `+ Add Action` when `hasAddTile` is true).

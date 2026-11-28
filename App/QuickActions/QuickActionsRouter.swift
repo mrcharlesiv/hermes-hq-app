@@ -364,6 +364,34 @@ import UIKit
             if !openPage("command-center", root: root) { notice("Status & Maintenance isn’t available.", root: root) }
         case .usage:
             if !openPage("usage", root: root) { notice("Usage isn’t available.", root: root) }
+        case .approvals:
+            if let first = (root.services as? AppModel)?.serverRequests?.allOpenPrompts().first,
+               let profile = first.profile, let record = voiceRecord(profile) {
+                _ = OpenBotChatIntent.open(record)
+            } else {
+                _ = openPage("bots", root: root)
+            }
+        case .activeRuns:
+            if !openPage("spawn-tree", root: root) { _ = openPage("bots", root: root) }
+        case .inlineAsk(let profile):
+            if let record = voiceRecord(profile) {
+                _ = OpenBotChatIntent.open(record)
+            } else {
+                await NewChatRouter.open(NewChatLink(bot: profile, project: nil, message: nil, send: false))
+            }
+        case .livePeek(let profile):
+            let chosen = profile.flatMap { id in root.services.bots.first { $0.id == id } }
+                ?? root.services.bots.first { $0.presence?.isEmpty == false }
+                ?? root.services.bots.first
+            if let bot = chosen, let model = root.services as? AppModel {
+                if bot.presence?.usingComputer == true {
+                    model.openScreen(bot, from: root)
+                } else {
+                    model.openBrowser(BrowserScope(profile: bot.id, title: bot.name), from: root)
+                }
+            } else {
+                notice("No bot is available on this gateway.", root: root)
+            }
         case .dashboardPage(let id):
             guard let tiles = dashboard(root) else { return notice("Tiles isn’t available on this gateway.", root: root) }
             tiles.loadViewIfNeeded()
@@ -376,6 +404,38 @@ import UIKit
             if !openPage("files", root: root) { notice("Files isn’t available on this gateway.", root: root) }
         case .link, .runJob, .sendInBackground, .quickAsk, .routine, .toggleSection, .unavailable:
             break
+        }
+    }
+
+    /// Opens a bot's Watch Browser directly from a Live Peek card.
+    static func openBrowser(profile: String, from page: QuickActionsViewController) {
+        Task {
+            if page.inSheet { await close(page) }
+            guard let root = MainTabController.current, let model = root.services as? AppModel else { return }
+            let name = botName(profile, root: root) ?? profile
+            model.openBrowser(BrowserScope(profile: profile, title: name), from: root)
+        }
+    }
+
+    /// Opens a bot's Bot Screen directly from a Live Peek card.
+    static func openScreen(profile: String, from page: QuickActionsViewController) {
+        Task {
+            if page.inSheet { await close(page) }
+            guard let root = MainTabController.current, let model = root.services as? AppModel else { return }
+            let name = botName(profile, root: root) ?? profile
+            model.openScreen(profile: profile, name: name, from: root)
+        }
+    }
+
+    /// Opens a specific bot's chat directly from Active Now / Approvals / Inline Ask cards.
+    static func openBotChat(profile: String, from page: QuickActionsViewController) {
+        Task {
+            if page.inSheet { await close(page) }
+            if let record = voiceRecord(profile) {
+                _ = OpenBotChatIntent.open(record)
+            } else {
+                await NewChatRouter.open(NewChatLink(bot: profile, project: nil, message: nil, send: false))
+            }
         }
     }
 

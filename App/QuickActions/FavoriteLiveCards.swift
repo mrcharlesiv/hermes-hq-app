@@ -177,10 +177,10 @@ struct FavoriteTasksCard: View {
 
     private var maxRows: Int {
         switch size {
-        case .small: 2
-        case .wide, .banner: 3
-        case .tallCard: 6
-        case .large, .extraLarge: 7
+        case .small: 3
+        case .wide, .banner: 4
+        case .tallCard: 7
+        case .large, .extraLarge: 9
         case .mini: 1
         }
     }
@@ -196,19 +196,22 @@ struct FavoriteTasksCard: View {
             LiveCardHeader(symbol: symbol, tint: tint, title: title) {
                 if let frame = snapshot?.frame {
                     HStack(spacing: 6) {
-                        if frame.waiting > 0 {
-                            Text("\(frame.waiting)")
-                                .font(Font.hq(.caption).weight(.bold))
-                                .monospacedDigit()
-                                .foregroundStyle(.white)
+                        if !model.isGatewayOnline {
+                            Text("Cached")
+                                .font(Font.hq(.caption2).weight(.medium))
+                                .foregroundStyle(Color.hqLabel2)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(Capsule().fill(Color.hqOrange))
-                        } else if frame.count > 0 {
-                            Text("\(frame.count)")
+                                .background(Capsule().fill(Color.hqFill3))
+                        }
+                        if frame.total > 0 {
+                            Text("\(frame.total)")
                                 .font(Font.hq(.caption).weight(.semibold))
                                 .monospacedDigit()
-                                .foregroundStyle(Color.hqLabel2)
+                                .foregroundStyle(frame.waiting > 0 ? Color.hqOrange : Color.hqLabel2)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(frame.waiting > 0 ? Color.hqOrange.opacity(0.14) : Color.hqFill3))
                         }
                         if size != .small {
                             Button { onAddTask() } label: {
@@ -307,7 +310,7 @@ struct FavoriteTasksCard: View {
                         if !compact, let note = row.note, !note.isEmpty {
                             Text(note)
                                 .font(Font.hq(.caption2))
-                                .foregroundStyle(row.tone == "needsYou" || row.tone == "ready" ? Color.hqOrange : Color.hqLabel2)
+                                .foregroundStyle(row.tone == "needsYou" ? Color.hqOrange : Color.hqLabel2)
                                 .lineLimit(1)
                         }
                     }
@@ -420,21 +423,23 @@ struct FavoriteNeedsYouCard: View {
     var tile: QuickTile
     var model: FavoritesLiveModel
     var size: QuickTileSize
+    var hasTodayTasksCard: Bool = false
     var onSelect: (FavoritesLiveModel.AttentionItem) -> Void
+    var onRetryJob: ((String, String) -> Void)? = nil
 
     private var maxItems: Int {
         switch size {
         case .small: 2
-        case .wide, .banner: 3
-        case .tallCard: 5
-        case .large, .extraLarge: 6
+        case .wide, .banner: 4
+        case .tallCard: 6
+        case .large, .extraLarge: 7
         case .mini: 1
         }
     }
 
     var body: some View {
         let _ = Theme.touch()
-        let items = model.attentionItems()
+        let items = model.attentionItems(hasTodayTasksCard: hasTodayTasksCard)
         let urgentCount = items.count(where: \.urgent)
         let title = tile.name.isEmpty ? "Needs You" : tile.name
 
@@ -444,14 +449,14 @@ struct FavoriteNeedsYouCard: View {
                 tint: urgentCount > 0 ? Color.hqOrange : Color.hqGreen,
                 title: title
             ) {
-                if urgentCount > 0 {
-                    Text("\(urgentCount)")
+                if !items.isEmpty {
+                    Text("\(items.count)")
                         .font(Font.hq(.caption).weight(.bold))
                         .monospacedDigit()
-                        .foregroundStyle(.white)
+                        .foregroundStyle(urgentCount > 0 ? Color.hqOrange : Color.hqLabel2)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.hqOrange))
+                        .background(Capsule().fill(urgentCount > 0 ? Color.hqOrange.opacity(0.14) : Color.hqFill3))
                 } else if let subs = model.activeSubagents, subs > 0 {
                     Text("\(subs) active")
                         .font(Font.hq(.caption2).weight(.semibold))
@@ -465,45 +470,69 @@ struct FavoriteNeedsYouCard: View {
                     Text("All caught up")
                         .font(Font.hq(.headline))
                         .foregroundStyle(Color.hqLabel)
-                    Text("Approvals, waiting tasks, and running bots appear here.")
+                    Text("Approvals, waiting tasks, failed jobs, and active bots appear here.")
                         .font(Font.hq(.caption))
                         .foregroundStyle(Color.hqLabel2)
                         .lineLimit(2)
                 }
                 Spacer(minLength: 0)
             } else {
-                VStack(alignment: .leading, spacing: 7) {
+                VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(items.prefix(maxItems))) { item in
-                        Button { onSelect(item) } label: {
-                            HStack(spacing: 8) {
-                                if let profile = item.profile {
-                                    HeadImage(raw: item.head, profile: profile, size: HQFont.scaled(22))
-                                        .frame(width: HQFont.scaled(22), height: HQFont.scaled(22))
-                                } else {
-                                    Image(systemName: item.symbol)
-                                        .font(Font.hq(.footnote).weight(.semibold))
-                                        .foregroundStyle(item.urgent ? Color.hqOrange : Color.hqTint)
-                                        .frame(width: HQFont.scaled(22), height: HQFont.scaled(22))
+                        HStack(spacing: 8) {
+                            if case .taskWaiting(let taskId) = item.kind {
+                                Button { model.toggleTaskDone(taskId) } label: {
+                                    Image(systemName: model.tickingTasks.contains(taskId) ? "checkmark.circle.fill" : "circle")
+                                        .font(Font.hq(.callout))
+                                        .foregroundStyle(model.tickingTasks.contains(taskId) ? Color.hqTint : Color.hqLabel3)
+                                        .contentShape(Rectangle().inset(by: -6))
                                 }
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(item.title)
-                                        .font(Font.hq(.footnote).weight(.semibold))
-                                        .foregroundStyle(Color.hqLabel)
-                                        .lineLimit(1)
-                                    Text(item.detail)
-                                        .font(Font.hq(.caption2))
-                                        .foregroundStyle(item.urgent ? Color.hqOrange : Color.hqLabel2)
-                                        .lineLimit(1)
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Mark \(item.title) Done")
+                            } else if let profile = item.profile {
+                                HeadImage(raw: item.head, profile: profile, size: HQFont.scaled(22))
+                                    .frame(width: HQFont.scaled(22), height: HQFont.scaled(22))
+                            } else {
+                                Image(systemName: item.symbol)
+                                    .font(Font.hq(.footnote).weight(.semibold))
+                                    .foregroundStyle(item.urgent ? Color.hqRed : Color.hqTint)
+                                    .frame(width: HQFont.scaled(22), height: HQFont.scaled(22))
+                            }
+                            Button { onSelect(item) } label: {
+                                HStack(spacing: 4) {
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(item.title)
+                                            .font(Font.hq(.footnote).weight(.semibold))
+                                            .foregroundStyle(Color.hqLabel)
+                                            .lineLimit(1)
+                                        Text(item.detail)
+                                            .font(Font.hq(.caption2))
+                                            .foregroundStyle(detailColor(for: item))
+                                            .lineLimit(1)
+                                    }
+                                    Spacer(minLength: 2)
                                 }
-                                Spacer(minLength: 2)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            if case .jobAttention(let key) = item.kind, let onRetryJob, size != .small {
+                                Button { onRetryJob(key, item.title) } label: {
+                                    Text("Retry")
+                                        .font(Font.hq(.caption2).weight(.semibold))
+                                        .foregroundStyle(Color.hqTintText)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Capsule().fill(Color.hqFill3))
+                                }
+                                .buttonStyle(.plain)
+                            } else {
                                 Image(systemName: "chevron.right")
                                     .font(Font.hq(.caption2).weight(.semibold))
                                     .foregroundStyle(Color.hqLabel3)
                                     .accessibilityHidden(true)
                             }
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 Spacer(minLength: 0)
@@ -516,6 +545,15 @@ struct FavoriteNeedsYouCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func detailColor(for item: FavoritesLiveModel.AttentionItem) -> Color {
+        switch item.kind {
+        case .jobAttention: Color.hqRed
+        case .botInput, .botAttention: Color.hqOrange
+        case .taskWaiting: item.urgent ? Color.hqOrange : Color.hqLabel2
+        case .botWorking: Color.hqTintText
+        }
     }
 }
 
@@ -803,7 +841,7 @@ struct FavoriteJobCard: View {
     }
 
     private var upcomingBody: some View {
-        let limit = size == .small ? 2 : (size.rowSpan > 1 ? 5 : 3)
+        let limit = size == .small ? 2 : (size.rowSpan > 1 ? 6 : 4)
         let items = model.upcomingJobs(limit: limit)
         let title = tile.name.isEmpty ? "Upcoming Jobs" : tile.name
 
@@ -823,21 +861,39 @@ struct FavoriteJobCard: View {
             } else {
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(items, id: \.job.key) { entry in
+                        let dot: Color = entry.running ? Color.hqTint : entry.failed ? Color.hqRed : entry.overdue ? Color.hqOrange : Color.hqGreen
+                        let schedule = JobWords.rowSubtitle(entry.job, running: false)
+                        let subtitle: String = {
+                            if entry.running { return "Running…" }
+                            if let reason = entry.reason { return "\(reason) · \(schedule)" }
+                            return schedule
+                        }()
                         HStack(spacing: 8) {
                             Circle()
-                                .fill(entry.running ? Color.hqTint : entry.failed ? Color.hqRed : Color.hqGreen)
+                                .fill(dot)
                                 .frame(width: 7, height: 7)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(entry.title)
                                     .font(Font.hq(.footnote).weight(.semibold))
                                     .foregroundStyle(Color.hqLabel)
                                     .lineLimit(1)
-                                Text(entry.running ? "Running…" : JobWords.rowSubtitle(entry.job, running: false))
+                                Text(subtitle)
                                     .font(Font.hq(.caption2))
-                                    .foregroundStyle(entry.failed ? Color.hqRed : Color.hqLabel2)
+                                    .foregroundStyle(entry.failed ? Color.hqRed : entry.overdue ? Color.hqOrange : Color.hqLabel2)
                                     .lineLimit(1)
                             }
                             Spacer(minLength: 2)
+                            if (entry.failed || entry.overdue) && !entry.running && size != .small && !dimmed {
+                                Button { onRunNow(entry.job.key, entry.title) } label: {
+                                    Text("Retry")
+                                        .font(Font.hq(.caption2).weight(.semibold))
+                                        .foregroundStyle(Color.hqTintText)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Capsule().fill(Color.hqFill3))
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
                     }
                 }
@@ -942,19 +998,34 @@ struct FavoriteGatewayStatusCard: View {
     var body: some View {
         let _ = Theme.touch()
         let status = model.gatewayStatus
-        let up = status?.gatewayRunning ?? (MorePages.context?.isOnline == true)
-        let title = tile.name.isEmpty ? "Gateway Status" : tile.name
+        let online = model.isGatewayOnline
+        let up = (status?.gatewayRunning ?? online) && online
+        let downCount = status?.platforms.count(where: \.isDown) ?? 0
+        let degraded = up && downCount > 0
+        let statusDot: Color = !up ? Color.hqRed : degraded ? Color.hqOrange : Color.hqGreen
+        let title = tile.name.isEmpty ? "Gateway" : tile.name
 
         VStack(alignment: .leading, spacing: 8) {
-            LiveCardHeader(symbol: "gauge.with.dots.needle.67percent", tint: up ? Color.hqGreen : Color.hqRed, title: title) {
-                Circle().fill(up ? Color.hqGreen : Color.hqRed).frame(width: 9, height: 9)
+            LiveCardHeader(symbol: "gauge.with.dots.needle.67percent", tint: statusDot, title: title) {
+                HStack(spacing: 5) {
+                    if degraded && size != .small {
+                        Text("\(downCount) down")
+                            .font(Font.hq(.caption2).weight(.semibold))
+                            .foregroundStyle(Color.hqOrange)
+                    } else if !online && status != nil {
+                        Text("Offline")
+                            .font(Font.hq(.caption2).weight(.semibold))
+                            .foregroundStyle(Color.hqRed)
+                    }
+                    Circle().fill(statusDot).frame(width: 9, height: 9)
+                }
             }
 
             if let status {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(status.gatewayWords)
+                    Text(degraded ? "Degraded" : status.gatewayWords)
                         .font(Font.hq(.title3).weight(.semibold))
-                        .foregroundStyle(Color.hqLabel)
+                        .foregroundStyle(degraded ? Color.hqOrange : Color.hqLabel)
                         .lineLimit(1)
                     if size != .small {
                         Text(status.versionWords)
@@ -1102,11 +1173,422 @@ struct FavoriteUsageCard: View {
                 if model.usageLoadingDays.contains(days) {
                     ProgressView().controlSize(.small)
                 } else {
-                    Text("No usage data yet.")
+                    Text(model.isGatewayOnline ? "No usage data yet." : "Offline")
                         .font(Font.hq(.footnote))
                         .foregroundStyle(Color.hqLabel2)
                 }
                 Spacer(minLength: 0)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - 11. Live Approvals & Questions Card
+
+struct FavoriteApprovalsCard: View {
+    var tile: QuickTile
+    var model: FavoritesLiveModel
+    var size: QuickTileSize
+    var onOpenBot: (String) -> Void
+
+    var body: some View {
+        let _ = Theme.touch()
+        let items = model.openApprovals()
+        let title = tile.name.isEmpty ? "Approvals" : tile.name
+
+        VStack(alignment: .leading, spacing: 8) {
+            LiveCardHeader(
+                symbol: items.isEmpty ? "checkmark.shield.fill" : "exclamationmark.shield.fill",
+                tint: items.isEmpty ? Color.hqGreen : Color.hqOrange,
+                title: title
+            ) {
+                if !items.isEmpty {
+                    Text("\(items.count)")
+                        .font(Font.hq(.caption).weight(.bold))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.hqOrange)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.hqOrange.opacity(0.14)))
+                }
+            }
+
+            if let first = items.first {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        if let profile = first.profile {
+                            HeadImage(raw: first.head, profile: profile, size: HQFont.scaled(22))
+                                .frame(width: HQFont.scaled(22), height: HQFont.scaled(22))
+                        }
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(first.title)
+                                .font(Font.hq(.footnote).weight(.semibold))
+                                .foregroundStyle(Color.hqLabel)
+                                .lineLimit(size == .small ? 2 : 1)
+                            Text(first.detail)
+                                .font(Font.hq(.caption2))
+                                .foregroundStyle(Color.hqLabel2)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    Spacer(minLength: 0)
+
+                    if first.isApproval {
+                        HStack(spacing: 8) {
+                            Button { model.answerApproval(first.id, choice: .once) } label: {
+                                Label("Allow", systemImage: "checkmark")
+                                    .font(Font.hq(.caption).weight(.semibold))
+                                    .foregroundStyle(Color.hqOnTint)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .frame(maxWidth: .infinity)
+                                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.hqTint))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(first.answering)
+
+                            Button { model.answerApproval(first.id, choice: .deny) } label: {
+                                Text("Deny")
+                                    .font(Font.hq(.caption).weight(.semibold))
+                                    .foregroundStyle(Color.hqRed)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .frame(maxWidth: .infinity)
+                                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.hqFill3))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(first.answering)
+                        }
+                    } else if let profile = first.profile {
+                        Button { onOpenBot(profile) } label: {
+                            Label("Answer Question", systemImage: "bubble.left.fill")
+                                .font(Font.hq(.caption).weight(.semibold))
+                                .foregroundStyle(Color.hqTintText)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .frame(maxWidth: .infinity)
+                                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.hqFill3))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            } else {
+                Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("No approvals waiting")
+                        .font(Font.hq(.subheadline).weight(.semibold))
+                        .foregroundStyle(Color.hqLabel)
+                    Text("Tool permissions and bot questions show here for one-tap answers.")
+                        .font(Font.hq(.caption))
+                        .foregroundStyle(Color.hqLabel2)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - 12. Live Active Runs & Subagents Card
+
+struct FavoriteActiveRunsCard: View {
+    var tile: QuickTile
+    var model: FavoritesLiveModel
+    var size: QuickTileSize
+    var onOpenBot: (String) -> Void
+
+    private var maxItems: Int {
+        switch size {
+        case .small: 2
+        case .wide, .banner: 4
+        case .tallCard: 6
+        case .large, .extraLarge: 8
+        case .mini: 1
+        }
+    }
+
+    var body: some View {
+        let _ = Theme.touch()
+        let runs = model.activeRunItems()
+        let title = tile.name.isEmpty ? "Active Now" : tile.name
+
+        VStack(alignment: .leading, spacing: 8) {
+            LiveCardHeader(symbol: "bolt.horizontal.circle.fill", tint: runs.isEmpty ? Color.hqLabel2 : Color.hqTint, title: title) {
+                if !runs.isEmpty {
+                    HStack(spacing: 5) {
+                        ProgressView().controlSize(.mini)
+                        Text("\(runs.count)")
+                            .font(Font.hq(.caption).weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(Color.hqTintText)
+                    }
+                }
+            }
+
+            if runs.isEmpty {
+                Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("All quiet")
+                        .font(Font.hq(.subheadline).weight(.semibold))
+                        .foregroundStyle(Color.hqLabel)
+                    Text("Running bots and background helpers stream live here.")
+                        .font(Font.hq(.caption))
+                        .foregroundStyle(Color.hqLabel2)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+            } else {
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(Array(runs.prefix(maxItems))) { run in
+                        Button { onOpenBot(run.profile) } label: {
+                            HStack(spacing: 8) {
+                                HeadImage(raw: run.head, profile: run.profile, size: HQFont.scaled(22))
+                                    .frame(width: HQFont.scaled(22), height: HQFont.scaled(22))
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(run.title)
+                                        .font(Font.hq(.footnote).weight(.semibold))
+                                        .foregroundStyle(Color.hqLabel)
+                                        .lineLimit(1)
+                                    Text(run.detail)
+                                        .font(Font.hq(.caption2))
+                                        .foregroundStyle(Color.hqTintText)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 2)
+                                if run.isSubagent && size != .small {
+                                    Text("Helper")
+                                        .font(Font.hq(.caption2).weight(.medium))
+                                        .foregroundStyle(Color.hqLabel2)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Capsule().fill(Color.hqFill3))
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - 13. Live Inline Ask / Quick Chat Card
+
+struct FavoriteInlineAskCard: View {
+    var tile: QuickTile
+    var model: FavoritesLiveModel
+    var size: QuickTileSize
+    var dimmed: Bool
+    var onOpenChat: (String) -> Void
+    @State private var draft = ""
+
+    var body: some View {
+        let _ = Theme.touch()
+        let profile = tile.bot ?? model.bots.first?.id ?? "default"
+        let bot = model.bot(profile)
+        let botName = bot?.name ?? tile.botName ?? "Hermes"
+        let title = tile.name.isEmpty ? "Ask \(botName)" : tile.name
+        let state = model.inlineAskByTile[tile.id]
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                HeadImage(raw: bot?.head, profile: profile, size: HQFont.scaled(24))
+                    .frame(width: HQFont.scaled(24), height: HQFont.scaled(24))
+                Text(title)
+                    .font(Font.hq(.subheadline).weight(.semibold))
+                    .foregroundStyle(Color.hqLabel)
+                    .lineLimit(1)
+                if state == nil && size != .small {
+                    Text("· replies inline")
+                        .font(Font.hq(.caption))
+                        .foregroundStyle(Color.hqLabel2)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if state?.sending == true {
+                    ProgressView().controlSize(.mini)
+                } else if state != nil {
+                    Button { model.clearInlineAsk(tileId: tile.id) } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color.hqLabel3)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear Reply")
+                }
+            }
+
+            if let state {
+                if state.sending {
+                    Text("“\(state.prompt)”")
+                        .font(Font.hq(.caption))
+                        .foregroundStyle(Color.hqLabel2)
+                        .lineLimit(1)
+                    Text("\(botName) is thinking…")
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqTintText)
+                } else if let error = state.error {
+                    Text(error)
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqRed)
+                        .lineLimit(2)
+                } else if let reply = state.reply {
+                    Text(reply)
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel)
+                        .lineLimit(size.rowSpan > 1 ? 6 : 2)
+                }
+                Spacer(minLength: 0)
+                HStack(spacing: 8) {
+                    Button { onOpenChat(profile) } label: {
+                        Label("Open Chat", systemImage: "arrow.up.forward")
+                            .font(Font.hq(.caption).weight(.semibold))
+                            .foregroundStyle(Color.hqTintText)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(Color.hqFill3))
+                    }
+                    .buttonStyle(.plain)
+                    Spacer(minLength: 0)
+                }
+            } else {
+                Spacer(minLength: 0)
+                HStack(spacing: 6) {
+                    TextField("Ask \(botName) anything…", text: $draft)
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel)
+                        .submitLabel(.send)
+                        .onSubmit { submit(profile: profile, botName: botName) }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.hqFill3))
+                        .disabled(dimmed)
+                    Button { submit(profile: profile, botName: botName) } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(Font.hq(.title3))
+                            .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.hqLabel3 : Color.hqTint)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(dimmed || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityLabel("Send to \(botName)")
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .opacity(dimmed ? 0.4 : 1)
+    }
+
+    private func submit(profile: String, botName: String) {
+        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
+        draft = ""
+        model.sendInlineAsk(tileId: tile.id, profile: profile, botName: botName, prompt: prompt)
+    }
+}
+
+// MARK: - 14. Live Browser & Screen Peek Card
+
+struct FavoriteLivePeekCard: View {
+    var tile: QuickTile
+    var model: FavoritesLiveModel
+    var size: QuickTileSize
+    var onOpenBrowser: (String) -> Void
+    var onOpenScreen: (String) -> Void
+
+    var body: some View {
+        let _ = Theme.touch()
+        let active = model.livePeekItems()
+        let lead = tile.bot.flatMap { model.bot($0) } ?? model.bots.first
+        let title = tile.name.isEmpty ? "Browser & Screen" : tile.name
+
+        let tealTint = Color(uiColor: QuickTileLook.color(.teal))
+        VStack(alignment: .leading, spacing: 8) {
+            LiveCardHeader(symbol: "display", tint: active.isEmpty ? Color.hqLabel2 : tealTint, title: title) {
+                if !active.isEmpty {
+                    Text("Live")
+                        .font(Font.hq(.caption2).weight(.bold))
+                        .foregroundStyle(tealTint)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(tealTint.opacity(0.14)))
+                } else if let lead, size != .small {
+                    Text(lead.name)
+                        .font(Font.hq(.caption))
+                        .foregroundStyle(Color.hqLabel2)
+                        .lineLimit(1)
+                }
+            }
+
+            if let first = active.first {
+                HStack(spacing: 8) {
+                    HeadImage(raw: first.head, profile: first.profile, size: HQFont.scaled(24))
+                        .frame(width: HQFont.scaled(24), height: HQFont.scaled(24))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(first.botName)
+                            .font(Font.hq(.footnote).weight(.semibold))
+                            .foregroundStyle(Color.hqLabel)
+                            .lineLimit(1)
+                        Text(first.browserLine ?? "Using its screen")
+                            .font(Font.hq(.caption2))
+                            .foregroundStyle(Color.hqLabel2)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Button {
+                        if first.usingComputer { onOpenScreen(first.profile) } else { onOpenBrowser(first.profile) }
+                    } label: {
+                        Text("Watch")
+                            .font(Font.hq(.caption).weight(.semibold))
+                            .foregroundStyle(Color.hqOnTint)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(Color.hqTint))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer(minLength: 0)
+            } else {
+                Spacer(minLength: 0)
+                if let lead, size != .small {
+                    HStack(spacing: 8) {
+                        Button { onOpenBrowser(lead.id) } label: {
+                            Label("Watch Browser", systemImage: "safari.fill")
+                                .font(Font.hq(.caption).weight(.semibold))
+                                .foregroundStyle(Color.hqLabel)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .frame(maxWidth: .infinity)
+                                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.hqFill3))
+                        }
+                        .buttonStyle(.plain)
+                        Button { onOpenScreen(lead.id) } label: {
+                            Label("Bot Screen", systemImage: "display")
+                                .font(Font.hq(.caption).weight(.semibold))
+                                .foregroundStyle(Color.hqLabel)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .frame(maxWidth: .infinity)
+                                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.hqFill3))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                } else {
+                    Text("No active browser or screen sessions.")
+                        .font(Font.hq(.caption))
+                        .foregroundStyle(Color.hqLabel2)
+                        .lineLimit(2)
+                }
             }
         }
         .padding(14)

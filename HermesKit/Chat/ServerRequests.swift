@@ -317,6 +317,49 @@ import Synchronization
 
     func entry(_ id: String) -> Entry? { entries.first { $0.id == id } }
 
+    /// [quick-actions] Snapshot of every open approval or clarify question across all sessions for Favorites live cards.
+    struct OpenPromptSummary: Identifiable {
+        let id: String
+        let sessionId: String
+        let profile: String?
+        let storedSessionId: String?
+        let approval: ApprovalPrompt?
+        let clarify: ClarifyPrompt?
+    }
+
+    func allOpenPrompts() -> [OpenPromptSummary] {
+        entries.compactMap { entry in
+            guard entry.state != .leaving else { return nil }
+            let rt = runtimes[entry.sessionId]
+            switch entry.kind {
+            case .approval:
+                return OpenPromptSummary(
+                    id: entry.id,
+                    sessionId: entry.sessionId,
+                    profile: rt?.profile,
+                    storedSessionId: rt?.storedId,
+                    approval: approvalPrompt(entry),
+                    clarify: nil
+                )
+            case .clarify:
+                let questions = ClarifyText.normalize(entry.params["questions"])
+                let prompt = ClarifyPrompt(id: entry.id, questions: questions,
+                                           lockedAnswers: ClarifyText.lockedAnswers(entry.params["answers"]),
+                                           sending: entry.state == .answering)
+                return OpenPromptSummary(
+                    id: entry.id,
+                    sessionId: entry.sessionId,
+                    profile: rt?.profile,
+                    storedSessionId: rt?.storedId,
+                    approval: nil,
+                    clarify: prompt
+                )
+            default:
+                return nil
+            }
+        }
+    }
+
     func draft(_ requestId: String) -> ClarifyDraft? { drafts[requestId] }
 
     func saveDraft(_ requestId: String, _ draft: ClarifyDraft) {

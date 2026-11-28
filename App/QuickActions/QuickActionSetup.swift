@@ -36,6 +36,10 @@ struct QuickActionChoice: Identifiable {
         choice(.tasks, "Tasks List", "live checklist with check-off"),
         choice(.goal, "Goal Progress", "ring, pace, and next step"),
         choice(.needsYou, "Needs You", "approvals, waiting tasks, active bots"),
+        choice(.approvals, "Approvals & Questions", "one-tap Allow / Deny & answers"),
+        choice(.activeRuns, "Active Now", "running bots & helpers"),
+        choice(.inlineAsk, "Inline Ask", "ask a bot right on Favorites"),
+        choice(.livePeek, "Browser & Screen", "watch bots browse or use screen"),
         choice(.botCard, "Live Bot Card", "avatar, status, Memo & Talk"),
         choice(.groupChat, "Group Chat", "live room card"),
         choice(.chatSession, "Specific Chat", "pin an ongoing thread"),
@@ -111,7 +115,7 @@ struct QuickActionChoice: Identifiable {
             tile.bot = first.id
             tile.botName = first.name
             if kind == .openChat || kind == .botCard { tile.name = first.name }
-            if kind == .quickAsk { tile.name = "Ask \(first.name)" }
+            if kind == .quickAsk || kind == .inlineAsk { tile.name = "Ask \(first.name)" }
         }
         if kind == .runJob, let job = JobShortcutCatalog.jobs().first {
             tile.job = job.key
@@ -130,7 +134,8 @@ struct QuickActionChoice: Identifiable {
             tile.name = firstGoal.title
             tile.wide = true
         }
-        if kind == .needsYou || kind == .botCard || kind == .kanban || kind == .usage || kind == .jobCard {
+        if kind == .needsYou || kind == .botCard || kind == .kanban || kind == .usage || kind == .jobCard
+            || kind == .approvals || kind == .activeRuns || kind == .inlineAsk || kind == .livePeek {
             tile.wide = true
         }
         if kind == .groupChat, let room = (MainTabController.current?.services as? GroupServices)?.groupStore?.rows().first {
@@ -415,7 +420,7 @@ final class QuickActionDraft {
             tile.botName = bots.first { $0.id == newValue }?.name
             if !nameTouched {
                 if kind == .openChat || kind == .botCard { tile.name = tile.botName ?? tile.name }
-                if kind == .quickAsk, let b = tile.botName { tile.name = "Ask \(b)" }
+                if kind == .quickAsk || kind == .inlineAsk, let b = tile.botName { tile.name = "Ask \(b)" }
             }
             if let project = tile.project, !projects.contains(where: { $0.key == project }) {
                 tile.project = nil
@@ -764,7 +769,9 @@ struct QuickActionSetupView: View {
     private func liveCardPreview(_ kind: QuickTileKind) -> some View {
         let size = draft.tileSize
         let width: CGFloat? = (size.isWideSpan || typeSize >= .accessibility3) ? nil : HQFont.scaled(186)
-        let height: CGFloat = size.rowSpan > 1 ? HQFont.scaled(220) : HQFont.scaled(160)
+        let height: CGFloat = size.rowSpan > 1
+            ? HQFont.scaled(220)
+            : (QuickTileLayout.usesCompactWideHeight(draft.tile) ? HQFont.scaled(134) : HQFont.scaled(160))
         return HStack {
             Spacer(minLength: 0)
             Group {
@@ -779,6 +786,10 @@ struct QuickActionSetupView: View {
                 case .kanban: FavoriteKanbanCard(tile: draft.tile, model: draft.previewLive, size: size, dimmed: false)
                 case .gatewayStatus: FavoriteGatewayStatusCard(tile: draft.tile, model: draft.previewLive, size: size)
                 case .usage: FavoriteUsageCard(tile: draft.tile, model: draft.previewLive, size: size)
+                case .approvals: FavoriteApprovalsCard(tile: draft.tile, model: draft.previewLive, size: size, onOpenBot: { _ in })
+                case .activeRuns: FavoriteActiveRunsCard(tile: draft.tile, model: draft.previewLive, size: size, onOpenBot: { _ in })
+                case .inlineAsk: FavoriteInlineAskCard(tile: draft.tile, model: draft.previewLive, size: size, dimmed: false, onOpenChat: { _ in })
+                case .livePeek: FavoriteLivePeekCard(tile: draft.tile, model: draft.previewLive, size: size, onOpenBrowser: { _ in }, onOpenScreen: { _ in })
                 default: EmptyView()
                 }
             }
@@ -832,10 +843,11 @@ struct QuickActionSetupView: View {
     }
 
     @ViewBuilder private func details(_ kind: QuickTileKind) -> some View {
-        if kind.needsBot || kind == .addTask || kind == .filesFolder {
+        if kind.needsBot || kind == .addTask || kind == .filesFolder || kind == .livePeek {
             Section {
                 Picker("Bot", selection: $draft.bot) {
-                    if kind == .addTask || kind == .filesFolder { Text("None").tag("") }
+                    if kind == .livePeek { Text("Any Active Bot").tag("") }
+                    else if kind == .addTask || kind == .filesFolder { Text("None").tag("") }
                     ForEach(draft.bots, id: \.id) { bot in Text(bot.name).tag(bot.id) }
                 }
                 .hqMenuPicker()
